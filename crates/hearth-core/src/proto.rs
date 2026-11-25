@@ -154,7 +154,8 @@ pub enum Request {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComposeAction {
     Pull,
-    /// `up -d`; with `no_start`, `up --no-start` (create only). `no_deps` adds `--no-deps`.
+    /// `up -d --pull missing`; with `no_start`, `up --no-start` (create only). `no_deps` adds
+    /// `--no-deps`.
     Up {
         no_start: bool,
         no_deps: bool,

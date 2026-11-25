@@ -691,7 +691,8 @@ pub async fn apply_files(
     job.log(format!("services to recreate: {}", changed.join(", ")));
     let running = desired(st, app) == Desired::Running;
     let attempt = async {
-        compose(st, job, app, ComposeAction::Pull, &changed).await?;
+        // No `pull` here: `up --pull missing` fetches only images that aren't on the host yet
+        // (e.g. a new tag in the file). Newer builds of an existing tag are `app update`'s job.
         compose(
             st,
             job,

@@ -67,6 +67,7 @@ Changes need an `apps:write` token. Always run `--dry-run --json` first, show th
 ```sh
 hearth install --name <app> -f compose.yml [--set KEY=VALUE]... [--no-start]
 hearth app apply <app> -f compose.yml [-m "why"]   # diff → recreate changed services → health check → rollback on failure
+                                                   # (pulls only missing images; newer builds come from `app update`)
 hearth app update <app>                            # same tag, newer build; keeps a rollback image
 hearth app start|stop|restart <app>                # stop means stopped, also after reboots
 hearth app revert <app> <revision>

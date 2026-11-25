@@ -265,7 +265,9 @@ pub async fn compose(
             if *force_recreate {
                 cmd.arg("--force-recreate");
             }
-            cmd.arg("--pull").arg("never").arg("--remove-orphans");
+            // `missing`: up fetches images that aren't here yet, but never updates one that is.
+            // (`pull --policy missing` can't do this: Compose 5.8 still asks the registry.)
+            cmd.arg("--pull").arg("missing").arg("--remove-orphans");
         }
         ComposeAction::Start => {
             cmd.arg("start");
