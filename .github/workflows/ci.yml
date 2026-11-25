@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # weekly: catch new advisories even without commits
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+
+  deny:
+    name: licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  build:
+    name: static build (${{ matrix.target }})
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install zig + cargo-zigbuild
+        run: |
+          pip install ziglang
+          cargo install --locked cargo-zigbuild
+      - run: cargo zigbuild --release --locked --target ${{ matrix.target }} -p hearth
+      - name: Check the binary is static and report its size
+        run: |
+          bin=target/${{ matrix.target }}/release/hearth
+          file "$bin"
+          file "$bin" | grep -Eq 'static(-pie)? linked|statically linked' || { echo "binary is not static"; exit 1; }
+          ls -l "$bin"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: hearth-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/hearth
+          retention-days: 14

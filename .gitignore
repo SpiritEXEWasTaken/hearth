@@ -1,0 +1,10 @@
+/target
+/ui/node_modules
+/ui/build
+/ui/.svelte-kit
+/android/.gradle
+/android/build
+/android/app/build
+/android/local.properties
+*.minisign.key
+.env
