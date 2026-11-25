@@ -223,8 +223,17 @@ pub async fn list(state: &State) -> (Vec<AppDetail>, Vec<String>) {
             Err(e) => warnings.push(format!("Docker {}: {e}", ep.label())),
         }
     }
+    let hearth_apps: Vec<String> = state
+        .helper
+        .call_as(&hearth_core::proto::Request::ListHearthApps)
+        .await
+        .unwrap_or_default();
     let mut out = Vec::new();
-    for g in group(raw) {
+    for mut g in group(raw) {
+        // An adopted app keeps its old containers (and their labels) until its first change.
+        if g.endpoint == DockerEndpoint::Root && hearth_apps.contains(&g.id) {
+            g.managed_by = ManagedBy::Hearth;
+        }
         let e = enrich(state, &g).await;
         let (external_variables, missing_devices, store_app_id) = e.detail_extra;
         out.push(AppDetail {

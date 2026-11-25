@@ -58,6 +58,94 @@ pub fn routes() -> Router<State> {
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}", get(get_job))
         .route("/v1/settings", get(get_settings).put(put_setting))
+        .route("/v1/migrate/casaos", get(migrate_report))
+        .route("/v1/migrate/casaos/backup", post(migrate_backup))
+        .route("/v1/migrate/casaos/adopt", post(migrate_adopt))
+        .route("/v1/migrate/casaos/undo", post(migrate_undo))
+}
+
+// ----- CasaOS migration -----
+
+async fn migrate_report(AxState(st): AxState<State>, p: Principal) -> ApiResult<super::migrate::Report> {
+    p.require(scopes::READ)?;
+    ok(super::migrate::report(&st).await.map_err(Error::Other)?)
+}
+
+async fn migrate_backup(AxState(st): AxState<State>, p: Principal) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    can_write(&p)?;
+    let st2 = st.clone();
+    let id = st.jobs.start(
+        &st,
+        "migrate-backup",
+        "casaos",
+        &actor(&p),
+        move |job| async move { super::migrate::backup(&st2, &job).await },
+    );
+    ok(json!(JobRef { job: id }))
+}
+
+#[derive(Deserialize)]
+struct AdoptBody {
+    app: String,
+    #[serde(default)]
+    fixes: Vec<String>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn migrate_adopt(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Json(b): Json<AdoptBody>,
+) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    if !proto::is_valid_hearth_app_name(&b.app) {
+        return Err(Error::Usage(format!(
+            "'{}' can't be adopted under that name (Hearth app names are lowercase letters, digits, '-' and '_')",
+            b.app
+        ))
+        .into());
+    }
+    if b.dry_run {
+        let r = super::migrate::report(&st).await.map_err(Error::Other)?;
+        let item = r.apps.into_iter().find(|a| a.app == b.app).ok_or_else(|| {
+            ApiError(Error::NotFound {
+                what: "CasaOS app",
+                name: b.app.clone(),
+            })
+        })?;
+        return ok(json!(item));
+    }
+    can_write(&p)?;
+    let (st2, app, who) = (st.clone(), b.app.clone(), actor(&p));
+    let id = st
+        .jobs
+        .start(&st, "adopt", &b.app, &actor(&p), move |job| async move {
+            super::migrate::adopt(&st2, &job, &app, &b.fixes, &who).await
+        });
+    ok(json!(JobRef { job: id }))
+}
+
+#[derive(Deserialize)]
+struct UndoBody {
+    app: String,
+}
+
+async fn migrate_undo(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Json(b): Json<UndoBody>,
+) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    can_write(&p)?;
+    let (st2, app) = (st.clone(), b.app.clone());
+    let id = st
+        .jobs
+        .start(&st, "undo-adopt", &b.app, &actor(&p), move |job| async move {
+            super::migrate::undo(&st2, &job, &app).await
+        });
+    ok(json!(JobRef { job: id }))
 }
 
 // ----- install / uninstall -----

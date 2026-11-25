@@ -1,7 +1,7 @@
 //! CLI commands that change things: they show a plan, ask for confirmation (or require
 //! `--yes` when there's no terminal), start a job, and follow it to the end.
 
-use crate::cli::{AppCmd, Command, GlobalArgs, ImagesCmd, JobCmd};
+use crate::cli::{AppCmd, CasaosCmd, Command, GlobalArgs, ImagesCmd, JobCmd, MigrateCmd};
 use crate::client::Client;
 use crate::render;
 use hearth_core::model::{ApplyPlan, HistoryEntry, ImageEntry, Job, JobRef, JobStatus, UpdatePlan};
@@ -433,8 +433,181 @@ pub async fn run(cmd: &Command, g: &GlobalArgs) -> Option<Result<ExitCode, Error
             .await
         }
         Command::App(cmd) => return app(&c, g, cmd).await,
+        Command::Migrate(MigrateCmd::Casaos { action }) => migrate(&c, g, action.as_ref()).await,
         _ => return None,
     })
+}
+
+async fn migrate(c: &Client, g: &GlobalArgs, action: Option<&CasaosCmd>) -> Result<ExitCode, Error> {
+    match action {
+        None => {
+            let r: Value = c.get("/v1/migrate/casaos").await?;
+            if g.json {
+                dry_out(g, &r);
+            } else {
+                print_migration_report(&r);
+            }
+            Ok(ExitCode::Ok)
+        }
+        Some(CasaosCmd::Backup) => {
+            if g.dry_run {
+                println!(
+                    "Would back up /var/lib/casaos, /etc/casaos, the CasaOS units, all container settings, and dump every Postgres database of CasaOS apps into /var/backups/hearth."
+                );
+                return Ok(ExitCode::Ok);
+            }
+            let r: JobRef = c.post("/v1/migrate/casaos/backup", None).await?;
+            follow(c, g, r).await
+        }
+        Some(CasaosCmd::Adopt { app, fixes }) => {
+            let plan: Value = c
+                .post(
+                    "/v1/migrate/casaos/adopt",
+                    Some(json!({ "app": app, "fixes": fixes, "dry_run": true })),
+                )
+                .await?;
+            if !g.json {
+                print_app_report(&plan, true);
+                if fixes.is_empty() {
+                    eprintln!("Adopting {app} doesn't restart it.");
+                } else {
+                    eprintln!(
+                        "With the fixes {}, {app} is recreated once (health-checked, rolled back if it fails).",
+                        fixes.join(", ")
+                    );
+                }
+            }
+            if g.dry_run {
+                dry_out(g, &plan);
+                return Ok(ExitCode::Ok);
+            }
+            if plan
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_some_and(|e| !e.is_empty())
+            {
+                return Err(Error::Usage(format!(
+                    "{app} can't be adopted yet (see the errors above)"
+                )));
+            }
+            confirm(g, &format!("Adopt {app}"))?;
+            let r: JobRef = c
+                .post(
+                    "/v1/migrate/casaos/adopt",
+                    Some(json!({ "app": app, "fixes": fixes })),
+                )
+                .await?;
+            follow(c, g, r).await
+        }
+        Some(CasaosCmd::Undo { app }) => {
+            if g.dry_run {
+                println!(
+                    "Would hand {app} back to CasaOS (Hearth's files moved aside; CasaOS's were never changed)."
+                );
+                return Ok(ExitCode::Ok);
+            }
+            confirm(g, &format!("Hand {app} back to CasaOS"))?;
+            let r: JobRef = c
+                .post("/v1/migrate/casaos/undo", Some(json!({ "app": app })))
+                .await?;
+            follow(c, g, r).await
+        }
+    }
+}
+
+fn strs(v: &Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+fn print_app_report(a: &Value, with_diff: bool) {
+    let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let status = if s("status") == "adopted" {
+        "adopted by Hearth"
+    } else {
+        "CasaOS app, not adopted yet"
+    };
+    println!("{} ({}) — {status}", s("title"), s("app"));
+    let containers = strs(a, "containers");
+    if !containers.is_empty() {
+        println!("  containers: {}", containers.join(", "));
+    }
+    for d in strs(a, "decisions") {
+        println!("  decision: {d}");
+    }
+    for w in strs(a, "warnings") {
+        println!("  warning: {w}");
+    }
+    for e in strs(a, "errors") {
+        println!("  ERROR: {e}");
+    }
+    for f in a.get("fixes").and_then(Value::as_array).into_iter().flatten() {
+        println!(
+            "  fix available: --fix {}  {}",
+            f.get("id").and_then(Value::as_str).unwrap_or_default(),
+            f.get("description").and_then(Value::as_str).unwrap_or_default()
+        );
+    }
+    let dbs = strs(a, "databases");
+    if !dbs.is_empty() {
+        println!("  databases dumped by the backup step: {}", dbs.join(", "));
+    }
+    let vars = strs(a, "env_vars");
+    if !vars.is_empty() {
+        println!("  .env will hold: {}", vars.join(", "));
+    }
+    if with_diff && !s("compose_diff").is_empty() {
+        println!("  file changes (CasaOS → Hearth, secrets hidden):");
+        for l in s("compose_diff").lines() {
+            println!("    {l}");
+        }
+    }
+}
+
+fn print_migration_report(r: &Value) {
+    let ci = r.get("casaos").cloned().unwrap_or(Value::Null);
+    if ci.get("installed").and_then(Value::as_bool) != Some(true) {
+        println!("CasaOS isn't installed here.");
+    } else {
+        println!(
+            "CasaOS {}: services {}",
+            ci.get("version").and_then(Value::as_str).unwrap_or("?"),
+            ci.get("services")
+                .and_then(Value::as_object)
+                .map(|m| m
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("?")))
+                    .collect::<Vec<_>>()
+                    .join(" "))
+                .unwrap_or_default()
+        );
+        let stores = strs(&ci, "app_stores");
+        if !stores.is_empty() {
+            println!(
+                "app stores (not carried over; Hearth has its own): {}",
+                stores.join(", ")
+            );
+        }
+    }
+    println!();
+    for a in r.get("apps").and_then(Value::as_array).into_iter().flatten() {
+        print_app_report(a, false);
+        println!();
+    }
+    let others = strs(r, "not_casaos");
+    if !others.is_empty() {
+        println!("Not CasaOS apps (left alone): {}", others.join(", "));
+    }
+    for n in strs(r, "notes") {
+        println!("note: {n}");
+    }
+    println!();
+    println!(
+        "Next steps: `hearth migrate casaos backup`, then `hearth migrate casaos adopt <app> [--fix ID]`."
+    );
+    println!("See the full file changes of one app with `hearth migrate casaos adopt <app> --dry-run`.");
 }
 
 async fn install(

@@ -170,6 +170,9 @@ fn log_request(req: &Request, uid: u32) {
         Request::CreateBackup { app, .. } => tracing::info!(uid, app, "create backup"),
         Request::RestoreBackup { app, file } => tracing::info!(uid, app, file, "restore backup"),
         Request::PruneBackups { app, keep } => tracing::info!(uid, app, keep, "prune backups"),
+        Request::BackupCasaos => tracing::info!(uid, "back up CasaOS"),
+        Request::DumpPostgres { app, service } => tracing::info!(uid, app, service, "dump postgres"),
+        Request::CasaosApply { app } => tracing::info!(uid, app, "hand back to CasaOS"),
         other => tracing::debug!(?other, uid, "helper request"),
     }
 }
@@ -236,6 +239,9 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         Request::ListBackups { app } => helper_apps::list_backups(cfg, &app),
         Request::RestoreBackup { app, file } => helper_apps::restore_backup(cfg, &app, &file, out).await,
         Request::PruneBackups { app, keep } => helper_apps::prune_backups(cfg, &app, keep),
+        Request::BackupCasaos => helper_apps::backup_casaos(cfg, out).await,
+        Request::DumpPostgres { app, service } => helper_apps::dump_postgres(cfg, &app, &service, out).await,
+        Request::CasaosApply { app } => helper_apps::casaos_apply(cfg, &app, out).await,
     };
     match result {
         Ok(data) => Response::Ok { data },

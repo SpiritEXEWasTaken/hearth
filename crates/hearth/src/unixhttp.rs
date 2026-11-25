@@ -60,3 +60,41 @@ pub async fn request(
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "request timed out"))?
 }
+
+/// Like [`request`], but hands the response body to `on_chunk` as it arrives (for large streams).
+/// Returns the status code.
+pub async fn request_streaming(
+    socket: &Path,
+    method: http::Method,
+    path_and_query: &str,
+    body: Option<Vec<u8>>,
+    mut on_chunk: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<u16> {
+    let stream = UnixStream::connect(socket).await?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .map_err(io_err)?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut req = http::Request::builder()
+        .method(method)
+        .uri(path_and_query)
+        .header("host", "localhost");
+    if body.is_some() {
+        req = req.header("content-type", "application/json");
+    }
+    let req = req
+        .body(Full::new(Bytes::from(body.unwrap_or_default())))
+        .map_err(io_err)?;
+    let resp = sender.send_request(req).await.map_err(io_err)?;
+    let status = resp.status().as_u16();
+    let mut body = resp.into_body();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(io_err)?;
+        if let Some(data) = frame.data_ref() {
+            on_chunk(data)?;
+        }
+    }
+    Ok(status)
+}

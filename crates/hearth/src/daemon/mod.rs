@@ -9,6 +9,7 @@ mod engine;
 mod health;
 mod helper_client;
 mod jobs;
+mod migrate;
 pub mod stats;
 mod versions;
 

@@ -5,6 +5,7 @@ mod cli;
 mod client;
 mod compose_norm;
 mod daemon;
+mod fixes;
 mod helper;
 mod helper_apps;
 mod render;

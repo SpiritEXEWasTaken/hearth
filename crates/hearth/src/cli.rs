@@ -113,6 +113,9 @@ pub enum Command {
         #[arg(num_args = 0..=2)]
         set: Vec<String>,
     },
+    /// Move apps from another manager to Hearth.
+    #[command(subcommand)]
+    Migrate(MigrateCmd),
     /// API tokens (for Claude, scripts and the Android app). Needs root or an admin token.
     #[command(subcommand)]
     Token(TokenCmd),
@@ -191,6 +194,31 @@ pub enum AppCmd {
     History { app: String },
     /// Go back to an earlier revision of the app's files.
     Revert { app: String, revision: u32 },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum MigrateCmd {
+    /// CasaOS: without a sub-command, a read-only report of what the migration would do.
+    Casaos {
+        #[command(subcommand)]
+        action: Option<CasaosCmd>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CasaosCmd {
+    /// Back up CasaOS (data, config, units, container settings) and dump every Postgres database.
+    Backup,
+    /// Take over an app's files. Nothing restarts, unless you add fixes (each recreates it once,
+    /// with a health check and automatic rollback).
+    Adopt {
+        app: String,
+        /// A fix from the report (e.g. jellyfin-udp, drop-rpi-paths). Repeat for several.
+        #[arg(long = "fix")]
+        fixes: Vec<String>,
+    },
+    /// Hand an adopted app back to CasaOS.
+    Undo { app: String },
 }
 
 #[derive(Debug, Subcommand)]

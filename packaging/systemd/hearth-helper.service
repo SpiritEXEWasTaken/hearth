@@ -30,7 +30,7 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+# No MemoryDenyWriteExecute: casaos-cli (run to hand apps back to CasaOS) crashes under it.
 SystemCallArchitectures=native
 # docker compose (run for app changes) may use netlink and IP sockets.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

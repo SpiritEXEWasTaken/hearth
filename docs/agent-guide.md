@@ -87,6 +87,12 @@ Rules for changes:
 - Read-only apps (CasaOS apps before migration, rootless apps) refuse changes with exit code 5
   and `error.kind = "read_only"`. That's expected; don't work around it.
 
+## Migrating from CasaOS
+
+`hearth migrate casaos --json` is read-only. `backup`, `adopt <app> [--fix ID]` and `undo <app>`
+are changes: show the person the report first, and adopt one app at a time. See
+`docs/migration-casaos.md`.
+
 ## Reading versions
 
 Each app's `images[]` entry has:

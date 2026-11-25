@@ -1,6 +1,6 @@
 ---
 name: hearth
-description: Manage the home server through the Hearth CLI (apps, versions, updates, logs, backups, host stats). Use when asked about server apps, their status, memory, versions, updates, logs or backups, or anything previously done with casaos-cli.
+description: Manage the home server through the Hearth CLI (apps, versions, updates, logs, backups, host stats, CasaOS migration). Use when asked about server apps, their status, memory, versions, updates, logs or backups, or anything previously done with casaos-cli.
 ---
 
 # Using Hearth safely
@@ -88,6 +88,12 @@ Rules for changes:
 - `--background` returns a job id immediately; follow it with `hearth job wait <id> --json`.
 - Read-only apps (CasaOS apps before migration, rootless apps) refuse changes with exit code 5
   and `error.kind = "read_only"`. That's expected; don't work around it.
+
+## Migrating from CasaOS
+
+`hearth migrate casaos --json` is read-only. `backup`, `adopt <app> [--fix ID]` and `undo <app>`
+are changes: show the person the report first, and adopt one app at a time. See
+`docs/migration-casaos.md`.
 
 ## Reading versions
 

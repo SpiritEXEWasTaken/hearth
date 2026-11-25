@@ -332,7 +332,7 @@ async fn run_streaming(mut cmd: tokio::process::Command, out: &mut Out<'_>) -> R
     if status.success() {
         Ok(json!({ "ok": true }))
     } else {
-        Err(format!("docker compose failed ({status}): {}", tail.join(" | ")))
+        Err(format!("the command failed ({status}): {}", tail.join(" | ")))
     }
 }
 
@@ -989,6 +989,293 @@ fn backup_files(
         }
     }
     Ok((compose, env))
+}
+
+// ----- migration support -----
+
+/// Archives everything CasaOS needs to be restored as it was, plus the settings of every
+/// container and image.
+pub async fn backup_casaos(cfg: &HelperConfig, out: &mut Out<'_>) -> Result<Value, String> {
+    let dir = cfg.backups_dir.join("casaos");
+    ensure_dir(&cfg.backups_dir, 0o700, None)?;
+    ensure_dir(&dir, 0o700, None)?;
+    // Container and image settings as JSON, so a recreate can always be compared or undone.
+    let list = docker(cfg, http::Method::GET, "/containers/json?all=true").await?;
+    let list: Vec<Value> = serde_json::from_slice(&list.body).unwrap_or_default();
+    let mut inspected = Vec::new();
+    for c in &list {
+        if let Some(id) = c.get("Id").and_then(Value::as_str)
+            && let Ok(r) = docker(cfg, http::Method::GET, &format!("/containers/{id}/json")).await
+        {
+            inspected.push(serde_json::from_slice::<Value>(&r.body).unwrap_or(Value::Null));
+        }
+    }
+    let images = list_images(cfg).await.unwrap_or(Value::Null);
+    let containers_json = serde_json::to_vec_pretty(&inspected).map_err(|e| e.to_string())?;
+    let images_json = serde_json::to_vec_pretty(&images).map_err(|e| e.to_string())?;
+    out.progress(&format!("saved the settings of {} containers", inspected.len()))
+        .await;
+
+    let mut paths: Vec<PathBuf> = vec!["/var/lib/casaos".into(), "/etc/casaos".into()];
+    for unit_dir in [
+        "/etc/systemd/system",
+        "/usr/lib/systemd/system",
+        "/lib/systemd/system",
+    ] {
+        if let Ok(rd) = fs::read_dir(unit_dir) {
+            for e in rd.filter_map(|e| e.ok()) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                // /lib is often a link to /usr/lib: archive each real file once.
+                let real = fs::canonicalize(e.path()).unwrap_or_else(|_| e.path());
+                if name.starts_with("casaos")
+                    && name.ends_with(".service")
+                    && !paths
+                        .iter()
+                        .any(|p| fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == real)
+                {
+                    paths.push(e.path());
+                }
+            }
+        }
+    }
+    for p in &paths {
+        out.progress(&format!("archiving {}", p.display())).await;
+    }
+    let name = format!("casaos-{}.tar.gz", timestamp());
+    let path = dir.join(&name);
+    let tmp = dir.join(format!(".{name}.partial"));
+    let tmp2 = tmp.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let file = fs::File::create(&tmp2).map_err(|e| e.to_string())?;
+        fs::set_permissions(&tmp2, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+        let mut tar = tar::Builder::new(GzEncoder::new(file, Compression::default()));
+        tar.follow_symlinks(false);
+        for (name, data) in [
+            ("containers.json", &containers_json),
+            ("images.json", &images_json),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o600);
+            h.set_cksum();
+            tar.append_data(&mut h, name, &data[..])
+                .map_err(|e| e.to_string())?;
+        }
+        for p in &paths {
+            let rel = format!("files{}", p.display());
+            if p.is_dir() {
+                tar.append_dir_all(&rel, p)
+                    .map_err(|e| format!("{}: {e}", p.display()))?;
+            } else if p.exists() {
+                tar.append_path_with_name(p, &rel)
+                    .map_err(|e| format!("{}: {e}", p.display()))?;
+            }
+        }
+        let file = tar
+            .into_inner()
+            .map_err(|e| e.to_string())?
+            .finish()
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Err(e) = result {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("CasaOS backup failed: {e}"));
+    }
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    out.progress(&format!("wrote {} ({} KiB)", path.display(), size / 1024))
+        .await;
+    Ok(json!(BackupInfo {
+        file: path.display().to_string(),
+        size_bytes: size,
+        created_at: now(),
+    }))
+}
+
+/// `pg_dumpall` inside a Postgres container, streamed (demultiplexed) into a gzip file.
+pub async fn dump_postgres(
+    cfg: &HelperConfig,
+    app: &str,
+    service: &str,
+    out: &mut Out<'_>,
+) -> Result<Value, String> {
+    if !proto::is_valid_app_name(app) || !proto::is_valid_service_name(service) {
+        return Err("invalid app or service name".into());
+    }
+    let list = docker(cfg, http::Method::GET, "/containers/json").await?;
+    let list: Vec<Value> = serde_json::from_slice(&list.body).unwrap_or_default();
+    let container = list
+        .iter()
+        .find(|c| {
+            c.pointer("/Labels/com.docker.compose.project")
+                .and_then(Value::as_str)
+                == Some(app)
+                && c.pointer("/Labels/com.docker.compose.service")
+                    .and_then(Value::as_str)
+                    == Some(service)
+        })
+        .ok_or_else(|| format!("{app}/{service} has no running container"))?;
+    let id = container
+        .get("Id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let image = container.get("Image").and_then(Value::as_str).unwrap_or_default();
+    if !(image.contains("postgres") || image.contains("pgvecto") || image.contains("vectorchord")) {
+        return Err(format!("{app}/{service} ({image}) doesn't look like Postgres"));
+    }
+    let info = docker(cfg, http::Method::GET, &format!("/containers/{id}/json")).await?;
+    let info: Value = serde_json::from_slice(&info.body).unwrap_or(Value::Null);
+    let user = info
+        .pointer("/Config/Env")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find_map(|e| e.strip_prefix("POSTGRES_USER="))
+        .unwrap_or("postgres")
+        .to_string();
+    if !user.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("unexpected POSTGRES_USER".into());
+    }
+    let exec = json!({
+        "AttachStdout": true,
+        "AttachStderr": true,
+        "Cmd": ["pg_dumpall", "-U", user, "--clean", "--if-exists"],
+    });
+    let resp = unixhttp::request(
+        &cfg.docker_socket,
+        http::Method::POST,
+        &format!("/containers/{id}/exec"),
+        &[],
+        Some(serde_json::to_vec(&exec).unwrap_or_default()),
+        1024 * 1024,
+        Duration::from_secs(30),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let exec_id = serde_json::from_slice::<Value>(&resp.body)
+        .ok()
+        .and_then(|v| v.get("Id").and_then(Value::as_str).map(str::to_string))
+        .ok_or_else(|| format!("docker refused the exec: {}", String::from_utf8_lossy(&resp.body)))?;
+
+    let dir = backups_dir(cfg, app);
+    ensure_dir(&cfg.backups_dir, 0o700, None)?;
+    ensure_dir(&dir, 0o700, None)?;
+    let name = format!("{app}-{service}-db-{}.sql.gz", timestamp());
+    let path = dir.join(&name);
+    let tmp = dir.join(format!(".{name}.partial"));
+    out.progress(&format!(
+        "dumping the {app}/{service} database (pg_dumpall as {user})"
+    ))
+    .await;
+    let file = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    let mut gz = GzEncoder::new(file, Compression::default());
+    let mut stderr = Vec::new();
+    let mut pending: Vec<u8> = Vec::new();
+    let mut written: u64 = 0;
+    let status = unixhttp::request_streaming(
+        &cfg.docker_socket,
+        http::Method::POST,
+        &format!("/exec/{exec_id}/start"),
+        Some(br#"{"Detach":false,"Tty":false}"#.to_vec()),
+        |chunk| {
+            pending.extend_from_slice(chunk);
+            // Demultiplex complete frames: [stream, 0, 0, 0, size(4, BE)] payload.
+            loop {
+                if pending.len() < 8 {
+                    break;
+                }
+                let size = u32::from_be_bytes([pending[4], pending[5], pending[6], pending[7]]) as usize;
+                if pending.len() < 8 + size {
+                    break;
+                }
+                let stream = pending[0];
+                let payload: Vec<u8> = pending[8..8 + size].to_vec();
+                pending.drain(..8 + size);
+                if stream == 2 {
+                    if stderr.len() < 64 * 1024 {
+                        stderr.extend_from_slice(&payload);
+                    }
+                } else {
+                    gz.write_all(&payload)?;
+                    written += payload.len() as u64;
+                }
+            }
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|e| format!("dump failed: {e}"))?;
+    let file = gz.finish().map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    let result = docker(cfg, http::Method::GET, &format!("/exec/{exec_id}/json")).await?;
+    let code = serde_json::from_slice::<Value>(&result.body)
+        .ok()
+        .and_then(|v| v.get("ExitCode").and_then(Value::as_i64))
+        .unwrap_or(-1);
+    if status >= 300 || code != 0 || written == 0 {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!(
+            "pg_dumpall failed (exit {code}): {}",
+            String::from_utf8_lossy(&stderr).trim()
+        ));
+    }
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    out.progress(&format!(
+        "wrote {} ({} MiB of SQL, {} KiB compressed)",
+        path.display(),
+        written / (1024 * 1024),
+        size / 1024
+    ))
+    .await;
+    Ok(json!(BackupInfo {
+        file: path.display().to_string(),
+        size_bytes: size,
+        created_at: now(),
+    }))
+}
+
+/// Asks CasaOS to install an app from its own compose file (used to hand an app back; CasaOS
+/// sets its own compose labels only when it creates the app itself).
+pub async fn casaos_apply(cfg: &HelperConfig, app: &str, out: &mut Out<'_>) -> Result<Value, String> {
+    if !proto::is_valid_app_name(app) {
+        return Err("invalid app name".into());
+    }
+    let file = cfg.casaos_apps_dir.join(app).join("docker-compose.yml");
+    if !file.is_file() {
+        return Err(format!("CasaOS has no file for {app} ({})", file.display()));
+    }
+    let bin = ["/usr/bin/casaos-cli", "/usr/local/bin/casaos-cli"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+        .ok_or("casaos-cli isn't installed")?;
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(["app-management", "install", "-f"])
+        .arg(&file)
+        .env_clear()
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        .env("HOME", "/root")
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    out.progress(&format!(
+        "casaos-cli app-management install -f {}",
+        file.display()
+    ))
+    .await;
+    let fut = run_streaming(cmd, out);
+    tokio::time::timeout(Duration::from_secs(120), fut)
+        .await
+        .map_err(|_| "casaos-cli didn't finish within 2 minutes".to_string())?
 }
 
 #[cfg(test)]

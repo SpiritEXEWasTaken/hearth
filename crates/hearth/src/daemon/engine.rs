@@ -185,7 +185,13 @@ pub fn web_of(compose_text: &str) -> Option<Web> {
         .and_then(|p| p.as_str())
         .unwrap_or("/")
         .to_string();
-    Some(Web { service, port, path })
+    let health = web.get("health").and_then(|p| p.as_str()).map(str::to_string);
+    Some(Web {
+        service,
+        port,
+        path,
+        health,
+    })
 }
 
 /// Container paths listed in `x-hearth.backup.exclude`.
@@ -299,7 +305,7 @@ pub fn unified_diff(old: &str, new: &str) -> String {
         .to_string()
 }
 
-fn today() -> String {
+pub fn today() -> String {
     let days = now().div_euclid(86400);
     let (y, m, d) = civil(days);
     format!("{y:04}-{m:02}-{d:02}")
@@ -588,10 +594,18 @@ pub async fn set_running(
             set_desired(st, app, Desired::Running);
             let action = if matches!(action, StateAction::Start) {
                 job.log(format!("starting {app}"));
-                ComposeAction::Up {
-                    no_start: false,
-                    no_deps: false,
-                    force_recreate: false,
+                // Containers that already exist are started as they are (`compose start`);
+                // only missing ones are created. This never recreates adopted containers.
+                let config = compose_config(st, app).await?;
+                let existing = health::containers_by_service(st, app).await?;
+                if service_names(&config).iter().all(|s| existing.contains_key(s)) {
+                    ComposeAction::Start
+                } else {
+                    ComposeAction::Up {
+                        no_start: false,
+                        no_deps: false,
+                        force_recreate: false,
+                    }
                 }
             } else {
                 job.log(format!("restarting {app}"));
@@ -663,7 +677,13 @@ pub async fn apply_files(
             )));
         }
     };
-    let changed = changed_services(&old_config, &new_config);
+    let mut changed = changed_services(&old_config, &new_config);
+    if !changed.is_empty() && has_foreign_containers(st, app).await {
+        // Containers created by another manager (e.g. CasaOS before adoption) are all recreated
+        // by Compose on the first change, so all of them go through the health gate.
+        changed = service_names(&new_config);
+        job.log("first change since adoption: all of the app's containers are recreated once");
+    }
     if changed.is_empty() {
         job.log("no container needs to change");
         return Ok(json!({ "app": app, "revision": rev, "changed": [] }));
@@ -731,6 +751,24 @@ pub async fn apply_files(
             "{e}\nRollback also failed: {re}"
         ))),
     }
+}
+
+/// True if any of the app's containers wasn't created from Hearth's app folder.
+async fn has_foreign_containers(st: &State, app: &str) -> bool {
+    let Ok(list) = st.helper.containers(&DockerEndpoint::Root).await else {
+        return false;
+    };
+    list.iter()
+        .filter(|c| {
+            c.pointer("/Labels/com.docker.compose.project")
+                .and_then(Value::as_str)
+                == Some(app)
+        })
+        .any(|c| {
+            !c.pointer("/Labels/com.docker.compose.project.working_dir")
+                .and_then(Value::as_str)
+                .is_some_and(|w| w.starts_with(apps::HEARTH_APPS_DIR))
+        })
 }
 
 fn rollback_repo(app: &str, service: &str) -> String {

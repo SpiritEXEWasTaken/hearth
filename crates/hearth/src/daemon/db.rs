@@ -71,6 +71,13 @@ const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
+    // 3: CasaOS migration log
+    "CREATE TABLE migrations (
+        app TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        fixes TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+     );",
 ];
 
 /// Settings with their defaults.
@@ -328,6 +335,16 @@ impl Db {
 
     pub fn forget_app(&self, app: &str) -> rusqlite::Result<()> {
         self.conn.execute("DELETE FROM app_state WHERE app = ?1", [app])?;
+        Ok(())
+    }
+
+    // ----- migration log -----
+
+    pub fn record_migration(&self, app: &str, status: &str, fixes: &[String]) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO migrations (app, status, fixes, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![app, status, fixes.join(" "), now()],
+        )?;
         Ok(())
     }
 

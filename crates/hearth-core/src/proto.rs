@@ -132,6 +132,21 @@ pub enum Request {
         app: String,
         keep: u32,
     },
+    /// Migration: archives /var/lib/casaos, /etc/casaos, the CasaOS unit files and the settings of
+    /// every container and image (as JSON) into /var/backups/hearth/casaos/.
+    BackupCasaos,
+    /// `pg_dumpall` of a Postgres service of a compose project (any app, CasaOS or Hearth),
+    /// streamed into /var/backups/hearth/<app>/<app>-<service>-db-<time>.sql.gz.
+    DumpPostgres {
+        app: String,
+        service: String,
+    },
+    /// Hands an app back to CasaOS: `casaos-cli app-management install -f <CasaOS's own file>`
+    /// (the app's containers must be removed first). CasaOS creates them asynchronously; the
+    /// daemon waits and checks.
+    CasaosApply {
+        app: String,
+    },
 }
 
 /// What `docker compose` should do. Each maps to one fixed command line in the helper.

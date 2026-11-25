@@ -122,9 +122,18 @@ pub fn normalize(input: &str, opts: &Options) -> Normalized {
             "PGID" => Some(opts.pgid.to_string()),
             "TZ" => Some(opts.tz.to_string()),
             "AppID" => Some(opts.app.to_string()),
+            // CasaOS's built-in defaults; kept so existing apps keep working, but flagged.
+            "DefaultUserName" => Some("admin".to_string()),
+            "DefaultPassword" => Some("casaos".to_string()),
             _ => None,
         };
         match default {
+            Some(v) if var.starts_with("Default") => {
+                out.decisions.push(format!(
+                    "set {var} in .env to CasaOS's built-in default (everyone knows it: change it in the app)"
+                ));
+                env.insert(var, v);
+            }
             Some(v) => {
                 out.decisions.push(format!(
                     "set {var}={v} in .env (it used to be filled in by the app manager)"
@@ -145,6 +154,7 @@ pub fn normalize(input: &str, opts: &Options) -> Normalized {
     if let Some(xc) = x_casaos.as_ref().and_then(Value::as_mapping) {
         convert_x_casaos(xc, &mut xh, main_service.as_deref());
     }
+    add_known_health(root, &mut xh);
     if !out.decisions.is_empty() {
         let mut list = xh
             .get("decisions")
@@ -164,6 +174,44 @@ pub fn normalize(input: &str, opts: &Options) -> Normalized {
     out.compose = format!("{HEADER}{body}");
     out.env = env;
     out
+}
+
+/// Readiness URLs of well-known apps, for a stricter health gate than "the port answers".
+fn known_health_path(image: &str) -> Option<&'static str> {
+    let name = image.split(['@', ':']).next().unwrap_or(image);
+    if name.ends_with("/jellyfin") || name == "jellyfin" {
+        Some("/health")
+    } else if name.ends_with("/home-assistant") || name.ends_with("/homeassistant") {
+        Some("/manifest.json")
+    } else if name.ends_with("/immich-server") {
+        Some("/api/server/ping")
+    } else {
+        None
+    }
+}
+
+/// Adds `x-hearth.web.health` when the web service is a known app and none is set.
+fn add_known_health(root: &Mapping, xh: &mut Mapping) {
+    let Some(web) = xh.get_mut("web").and_then(Value::as_mapping_mut) else {
+        return;
+    };
+    if web.contains_key("health") {
+        return;
+    }
+    let service = web.get("service").and_then(Value::as_str).map(str::to_string);
+    let image = root
+        .get("services")
+        .and_then(Value::as_mapping)
+        .and_then(|s| match &service {
+            Some(name) => s.get(name.as_str()),
+            None => s.values().next(),
+        })
+        .and_then(|svc| svc.get("image"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(p) = known_health_path(image) {
+        web.insert("health".into(), p.into());
+    }
 }
 
 fn convert_x_casaos(xc: &Mapping, xh: &mut Mapping, first_service: Option<&str>) {
@@ -522,6 +570,11 @@ x-casaos:
         assert!(n.compose.contains("x-hearth"));
         assert!(n.compose.contains("title: Jellyfin"));
         assert!(
+            n.compose.contains("health: /health"),
+            "known readiness URL: {}",
+            n.compose
+        );
+        assert!(
             n.compose.contains("port: '8097'") || n.compose.contains("port: \"8097\""),
             "{}",
             n.compose
@@ -586,6 +639,17 @@ x-casaos:
         assert!(second.decisions.is_empty(), "{:?}", second.decisions);
         assert_eq!(first.compose, second.compose);
         assert_eq!(first.env, second.env);
+    }
+
+    #[test]
+    fn casaos_default_credentials_are_filled_but_flagged() {
+        let input = "services:\n  a:\n    image: x\n    environment:\n      USER: $DefaultUserName\n";
+        let empty = BTreeMap::new();
+        let exists = |_: &str| true;
+        let n = normalize(input, &opts(&empty, &empty, &exists));
+        assert!(n.errors.is_empty(), "{:?}", n.errors);
+        assert_eq!(n.env.get("DefaultUserName").map(String::as_str), Some("admin"));
+        assert!(n.decisions.iter().any(|d| d.contains("change it")));
     }
 
     #[test]

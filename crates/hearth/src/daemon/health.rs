@@ -21,6 +21,9 @@ pub struct Web {
     pub service: String,
     pub port: u16,
     pub path: String,
+    /// A readiness URL that must answer 2xx (e.g. Jellyfin's /health). Without it, any
+    /// non-error answer from `path` counts.
+    pub health: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,11 +117,22 @@ pub async fn wait_healthy(state: &State, job: &JobHandle, spec: &GateSpec) -> Re
                 None => {
                     let web = spec.web.as_ref().filter(|w| &w.service == svc);
                     if let Some(w) = web {
-                        if let Some(code) = probe(w.port, &w.path).await
-                            && code < 500
+                        let (path, strict) = match &w.health {
+                            Some(hp) => (hp.as_str(), true),
+                            None => (w.path.as_str(), false),
+                        };
+                        if let Some(code) = probe(w.port, path).await
+                            && (if strict {
+                                (200..300).contains(&code)
+                            } else {
+                                code < 500
+                            })
                         {
                             s.passed = true;
-                            job.log(format!("{svc}: web port {} answers (HTTP {code})", w.port));
+                            job.log(format!(
+                                "{svc}: http://127.0.0.1:{}{path} answers (HTTP {code})",
+                                w.port
+                            ));
                             continue;
                         }
                         all_ok = false;
