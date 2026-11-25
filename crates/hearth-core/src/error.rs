@@ -25,6 +25,10 @@ pub enum Error {
     #[error("health check failed and rollback FAILED: {0}")]
     RollbackFailed(String),
 
+    /// The app can't be changed by Hearth (a CasaOS app not yet adopted, or a rootless/external app).
+    #[error("read-only app: {0}")]
+    ReadOnly(String),
+
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
 
@@ -49,7 +53,7 @@ impl Error {
             Error::Usage(_) => ExitCode::Usage,
             Error::NotFound { .. } => ExitCode::NotFound,
             Error::NeedsConfirmation(_) => ExitCode::NeedsConfirmation,
-            Error::Unauthorized(_) => ExitCode::Unauthorized,
+            Error::Unauthorized(_) | Error::ReadOnly(_) => ExitCode::Unauthorized,
             Error::RolledBack(_) => ExitCode::RolledBack,
             Error::RollbackFailed(_) => ExitCode::RollbackFailed,
             Error::NotImplemented(_) | Error::Io(_) | Error::Other(_) => ExitCode::Error,
@@ -64,6 +68,7 @@ impl Error {
             Error::NotFound { .. } => "not_found",
             Error::NeedsConfirmation(_) => "needs_confirmation",
             Error::Unauthorized(_) => "unauthorized",
+            Error::ReadOnly(_) => "read_only",
             Error::RolledBack(_) => "rolled_back",
             Error::RollbackFailed(_) => "rollback_failed",
             Error::NotImplemented(_) => "not_implemented",

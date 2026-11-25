@@ -1,5 +1,5 @@
 [Unit]
-Description=Hearth privileged helper (read-only Docker and CasaOS access for the Hearth daemon)
+Description=Hearth privileged helper (Docker and app-file operations for the Hearth daemon)
 Documentation=https://github.com/SpiritEXEWasTaken/hearth
 After=docker.service
 Wants=docker.service
@@ -12,10 +12,11 @@ RestartSec=5
 RuntimeDirectory=hearth-helper
 RuntimeDirectoryMode=0755
 
-# The helper runs as root but only needs to read: Docker sockets, /run/user/*/docker.sock and
-# /var/lib/casaos/apps. It never writes outside its runtime directory in this version.
+# The helper runs as root. It reads Docker sockets, /run/user/*/docker.sock and /var/lib/casaos/apps,
+# and writes only Hearth's own folders (/var/lib/hearth/apps, /var/backups/hearth) and, for a
+# restore, the data folders of the app being restored. /usr, /boot and /etc stay read-only.
 NoNewPrivileges=yes
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
@@ -31,12 +32,14 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX
-# CAP_DAC_OVERRIDE/READ_SEARCH: reach users' rootless sockets under /run/user/<uid> (mode 0700).
-# CAP_CHOWN: hand the helper socket to the hearth user.
-CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN
+# docker compose (run for app changes) may use netlink and IP sockets.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# CAP_DAC_OVERRIDE/READ_SEARCH: reach users' rootless sockets and data folders owned by others.
+# CAP_CHOWN/FOWNER/FSETID: hand sockets and files to the hearth group; restore file ownership.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN CAP_FOWNER CAP_FSETID
 AmbientCapabilities=
-MemoryMax=64M
+# Includes docker compose child processes during pulls.
+MemoryMax=512M
 
 [Install]
 WantedBy=multi-user.target

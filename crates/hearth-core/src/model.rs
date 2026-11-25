@@ -221,3 +221,109 @@ pub mod scopes {
         ALL.contains(&s)
     }
 }
+
+// ----- M2: jobs, plans, history, images -----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Running,
+    Succeeded,
+    Failed,
+    /// The change failed its health check and was rolled back successfully.
+    RolledBack,
+    /// The change failed and so did the rollback: manual attention needed.
+    RollbackFailed,
+}
+
+impl JobStatus {
+    pub fn is_done(self) -> bool {
+        self != JobStatus::Running
+    }
+}
+
+/// A change running (or finished) in the daemon. Poll `GET /v1/jobs/{id}?after=N` for new events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Job {
+    pub id: String,
+    /// What it does: "install", "start", "stop", "restart", "apply", "update", "revert", "backup", "restore", "uninstall".
+    pub kind: String,
+    pub app: String,
+    pub status: JobStatus,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    /// Progress lines, in order. With `?after=N` only lines from index N on are returned.
+    pub events: Vec<String>,
+    /// Index of the first event in `events` (for incremental polling).
+    pub events_from: usize,
+    /// The job's outcome, when done.
+    pub result: Option<serde_json::Value>,
+    /// The error, when it failed.
+    pub error: Option<String>,
+}
+
+/// Returned by every change request: the job that carries it out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobRef {
+    pub job: String,
+}
+
+/// What an update would do (`--dry-run`, and the confirmation prompt).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdatePlan {
+    pub app: String,
+    pub services: Vec<ServiceUpdate>,
+    /// A backup will be taken first (a database image changes).
+    pub backup_first: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceUpdate {
+    pub service: String,
+    pub reference: String,
+    pub running_digest: Option<String>,
+    pub running_version: Option<String>,
+    pub new_digest: Option<String>,
+    pub new_version: Option<String>,
+    /// Suggestions only; never applied by `update`.
+    pub newer_in_track: Option<String>,
+    pub newer_major: Option<String>,
+}
+
+/// What applying a new compose file would do.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApplyPlan {
+    pub app: String,
+    /// Unified diff of compose.yaml (secrets hidden).
+    pub compose_diff: String,
+    /// Names of `.env` variables added, changed or removed (values never shown).
+    pub env_changes: Vec<String>,
+    /// Decisions Hearth made while normalising the file (dropped devices, moved secrets…).
+    pub decisions: Vec<String>,
+    /// Problems that block the change.
+    pub errors: Vec<String>,
+    /// Warnings that don't block it.
+    pub warnings: Vec<String>,
+    /// True when nothing would change.
+    pub unchanged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub revision: u32,
+    pub time: i64,
+    pub actor: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageEntry {
+    pub id: String,
+    pub tags: Vec<String>,
+    pub size_bytes: u64,
+    pub created: i64,
+    /// Used by at least one container.
+    pub in_use: bool,
+    /// A Hearth rollback image (`hearth-rollback/...`).
+    pub rollback: bool,
+}

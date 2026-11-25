@@ -57,6 +57,7 @@ pub fn router(state: State) -> Router {
         .route("/v1/versions/check", post(check_versions))
         .route("/v1/tokens", get(list_tokens).post(create_token))
         .route("/v1/tokens/{id}", delete(revoke_token))
+        .merge(super::api_changes::routes())
         .with_state(state)
 }
 
@@ -156,10 +157,24 @@ async fn app_compose(
 ) -> ApiResult<String> {
     p.require(scopes::READ)?;
     let app = find_app(&state, &id).await?;
-    if app.summary.managed_by != hearth_core::model::ManagedBy::Casaos {
-        return Err(Error::NotImplemented("compose files of non-CasaOS apps (milestone M2)").into());
-    }
-    let text = state.helper.casaos_app(&id).await.map_err(Error::Other)?;
+    let text = match app.summary.managed_by {
+        hearth_core::model::ManagedBy::Casaos => state.helper.casaos_app(&id).await.map_err(Error::Other)?,
+        hearth_core::model::ManagedBy::Hearth => {
+            let v = state
+                .helper
+                .call(&hearth_core::proto::Request::ReadAppFiles {
+                    app: id.clone(),
+                    include_env: false,
+                })
+                .await
+                .map_err(Error::Other)?;
+            v.get("compose")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        }
+        _ => return Err(Error::NotImplemented("compose files of apps Hearth doesn't manage").into()),
+    };
     // Secrets are always hidden here; nobody needs them through this endpoint.
     ok(hearth_core::redact::redact_compose_text(&text))
 }

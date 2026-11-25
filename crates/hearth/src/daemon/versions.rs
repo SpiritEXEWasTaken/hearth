@@ -88,7 +88,7 @@ async fn check_reference(state: &State, reference: &str) {
     });
 }
 
-async fn version_for(state: &State, r: &ImageRef, digest: &str) -> Option<String> {
+pub async fn version_for(state: &State, r: &ImageRef, digest: &str) -> Option<String> {
     if let Some(cached) = state.with_db(|db| db.digest_version(digest).ok().flatten()) {
         return cached;
     }

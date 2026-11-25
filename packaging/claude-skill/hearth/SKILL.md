@@ -1,6 +1,6 @@
 ---
 name: hearth
-description: Manage the home server through the Hearth CLI (apps, versions, logs, host stats). Use when asked about server apps, their status, memory, versions, updates or logs, or anything previously done with casaos-cli.
+description: Manage the home server through the Hearth CLI (apps, versions, updates, logs, backups, host stats). Use when asked about server apps, their status, memory, versions, updates, logs or backups, or anything previously done with casaos-cli.
 ---
 
 # Using Hearth safely
@@ -46,16 +46,48 @@ description: Manage the home server through the Hearth CLI (apps, versions, logs
   `system:write` (OS updates and packages) is granted only if the person wants that.
 - Only root can create tokens: `sudo hearth token create --name claude --scope read --scope apps:write`.
 
-## Useful commands (milestone M1: read-only)
+## Commands
+
+Read-only commands are always safe to run:
 
 ```sh
 hearth status --json                      # host stats + every app (state, health, memory, versions)
 hearth stats --json                       # CPU, memory, swap, PSI, OOM kills, disks
 hearth apps list --json [--check]         # --check asks registries first (takes a few seconds)
-hearth app info <app> --json [--compose]  # containers, images, CasaOS findings; compose with secrets hidden
+hearth app info <app> --json [--compose]  # containers, images, findings; compose with secrets hidden
 hearth app logs <app> --json [--service s] [--tail N] [--since SECONDS]
 hearth app update <app>|--all --check --json   # exit 10 when updates are available
+hearth app history <app> --json           # every change to the app's files
+hearth backups <app> --json
+hearth images list --json
+hearth job list --json / hearth job show <id> --json
 ```
+
+Changes need an `apps:write` token. Always run `--dry-run --json` first, show the person the plan
+(the diff, decisions, warnings), and add `--yes` only after they agree:
+
+```sh
+hearth install --name <app> -f compose.yml [--set KEY=VALUE]... [--no-start]
+hearth app apply <app> -f compose.yml [-m "why"]   # diff → recreate changed services → health check → rollback on failure
+hearth app update <app>                            # same tag, newer build; keeps a rollback image
+hearth app start|stop|restart <app>                # stop means stopped, also after reboots
+hearth app revert <app> <revision>
+hearth backup <app> [--exclude CONTAINER_PATH]... [--no-stop]
+hearth restore <app> <backup-file>                 # current data is moved aside, not deleted
+hearth uninstall <app> [--delete-data]             # data is KEPT unless --delete-data
+hearth images prune [--keep N] [--unused]
+```
+
+Rules for changes:
+
+- One app at a time. Never loop `update` over every app without asking.
+- `--delete-data` and `restore` are destructive: only use them when the person asked for exactly that.
+- Exit code 6 means the change failed and Hearth put the previous version back. The app is fine;
+  report the error and the log lines in it. Exit code 7 means the rollback failed too: tell the
+  person at once and don't try more changes to that app.
+- `--background` returns a job id immediately; follow it with `hearth job wait <id> --json`.
+- Read-only apps (CasaOS apps before migration, rootless apps) refuse changes with exit code 5
+  and `error.kind = "read_only"`. That's expected; don't work around it.
 
 ## Reading versions
 

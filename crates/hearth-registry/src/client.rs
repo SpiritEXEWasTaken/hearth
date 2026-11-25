@@ -135,10 +135,16 @@ impl RegistryClient {
     }
 
     fn base(&self, r: &ImageRef) -> String {
-        self.overrides
-            .get(&r.registry)
-            .cloned()
-            .unwrap_or_else(|| format!("https://{}", r.api_host()))
+        self.overrides.get(&r.registry).cloned().unwrap_or_else(|| {
+            // Like Docker, talk plain HTTP to registries on this machine.
+            let host = r.registry.split(':').next().unwrap_or_default();
+            let scheme = if matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+                "http"
+            } else {
+                "https"
+            };
+            format!("{scheme}://{}", r.api_host())
+        })
     }
 
     /// The digest the image's tag points to now. Uses `HEAD` (not counted by Docker Hub's limits).

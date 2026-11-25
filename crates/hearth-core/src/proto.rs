@@ -46,13 +46,147 @@ pub enum Request {
     ReadCasaosApp {
         name: String,
     },
+
+    // ----- Hearth-managed apps (root Docker, files under /var/lib/hearth/apps/<app>) -----
+    /// Names of Hearth apps.
+    ListHearthApps,
+    /// `compose.yaml` and (if asked) `.env` of a Hearth app.
+    ReadAppFiles {
+        app: String,
+        include_env: bool,
+    },
+    /// Writes `compose.yaml` and `.env` atomically and records a history revision.
+    /// Returns the new revision number.
+    WriteAppFiles {
+        app: String,
+        compose: String,
+        env: String,
+        message: String,
+        actor: String,
+    },
+    /// Revision list (no file contents).
+    ListHistory {
+        app: String,
+    },
+    /// One revision's files.
+    ReadRevision {
+        app: String,
+        revision: u32,
+    },
+    /// Moves the app directory to /var/lib/hearth/removed/<app>-<time> (nothing is deleted).
+    RemoveAppDir {
+        app: String,
+    },
+    /// Runs `docker compose` for a Hearth app. Streams progress lines.
+    Compose {
+        app: String,
+        action: ComposeAction,
+        /// Limit to these services (empty: all).
+        services: Vec<String>,
+    },
+    /// `docker compose config --format json`: the fully resolved project.
+    ComposeConfig {
+        app: String,
+    },
+    /// Validates compose text (with its .env) without writing anything: `docker compose config -q`.
+    ValidateCompose {
+        app: String,
+        compose: String,
+        env: String,
+    },
+    /// `POST /images/{source}/tag`
+    TagImage {
+        source: String,
+        repo: String,
+        tag: String,
+    },
+    /// `DELETE /images/{name}` (untag; the image is removed when nothing else uses it).
+    RemoveImage {
+        name: String,
+    },
+    /// `GET /images/json` (root Docker).
+    ListImages,
+    /// Deletes data on uninstall: the project's named volumes, and bind sources under the
+    /// Hearth data root. Other paths are reported, never deleted.
+    DeleteAppData {
+        app: String,
+        volumes: Vec<String>,
+        paths: Vec<String>,
+    },
+    /// Writes a backup archive of the app (files, named volumes, bind-mounted data).
+    CreateBackup {
+        app: String,
+        /// Container paths to leave out (e.g. a media library).
+        exclude_targets: Vec<String>,
+    },
+    ListBackups {
+        app: String,
+    },
+    /// Restores data and files from a backup archive (the app must be stopped).
+    RestoreBackup {
+        app: String,
+        file: String,
+    },
+    /// Deletes old backups beyond `keep`.
+    PruneBackups {
+        app: String,
+        keep: u32,
+    },
+}
+
+/// What `docker compose` should do. Each maps to one fixed command line in the helper.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ComposeAction {
+    Pull,
+    /// `up -d`; with `no_start`, `up --no-start` (create only). `no_deps` adds `--no-deps`.
+    Up {
+        no_start: bool,
+        no_deps: bool,
+        force_recreate: bool,
+    },
+    Start,
+    Stop,
+    Restart,
+    /// `down`; never removes volumes unless `volumes` is true.
+    Down {
+        volumes: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
-    Ok { data: serde_json::Value },
-    Err { message: String },
+    Ok {
+        data: serde_json::Value,
+    },
+    Err {
+        message: String,
+    },
+    /// A progress line from a long operation; more messages follow until `Ok` or `Err`.
+    Progress {
+        line: String,
+    },
+}
+
+/// One saved revision of an app's files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Revision {
+    pub revision: u32,
+    pub time: i64,
+    pub actor: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupInfo {
+    pub file: String,
+    pub size_bytes: u64,
+    pub created_at: i64,
 }
 
 /// Data of a `ContainerLogs` response.
@@ -77,6 +211,35 @@ pub fn is_valid_docker_ref(s: &str) -> bool {
         && !s.contains("..")
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "_.-:/@".contains(c))
+}
+
+/// Validates a Hearth app name: it becomes the compose project name and a directory name,
+/// so lowercase letters, digits, `-` and `_`, starting with a letter or digit.
+pub fn is_valid_hearth_app_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 63
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// Validates a compose service name.
+pub fn is_valid_service_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.starts_with('-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+}
+
+/// Validates a backup file name (as returned by `ListBackups`).
+pub fn is_valid_backup_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 200
+        && !s.starts_with('.')
+        && s.ends_with(".tar.gz")
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
 }
 
 /// Validates a CasaOS app (directory) name.

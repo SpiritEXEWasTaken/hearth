@@ -171,6 +171,18 @@ pub fn matching_repo_digest(reference: &str, repo_digests: &[String]) -> Option<
     })
 }
 
+/// The digest the running image was published as: its RepoDigest for this reference, else
+/// (containerd image store, e.g. images pushed or tagged locally) the image's own content
+/// descriptor, which is the same index/manifest digest a registry reports.
+pub fn running_digest(reference: &str, repo_digests: &[String], image: &Value) -> Option<String> {
+    matching_repo_digest(reference, repo_digests).or_else(|| {
+        image
+            .pointer("/Descriptor/digest")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
 /// The cache key for a reference: normalised, tag kept, pinned digest dropped.
 pub fn check_key(reference: &str) -> Option<String> {
     let r = ImageRef::parse(reference).ok()?;
@@ -296,7 +308,7 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        let running_digest = matching_repo_digest(&reference, &repo_digests);
+        let running_digest = running_digest(&reference, &repo_digests, &image);
         let labels: BTreeMap<String, String> = image
             .pointer("/Config/Labels")
             .and_then(Value::as_object)
@@ -349,6 +361,31 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
             Err(e) => tracing::warn!(app = %g.id, "cannot read CasaOS compose file: {e}"),
         }
     }
+    // Hearth apps: title, icon and web link from x-hearth.
+    if g.managed_by == ManagedBy::Hearth && g.endpoint == DockerEndpoint::Root {
+        let req = hearth_core::proto::Request::ReadAppFiles {
+            app: g.id.clone(),
+            include_env: false,
+        };
+        if let Ok(v) = state.helper.call(&req).await
+            && let Some(text) = v.get("compose").and_then(Value::as_str)
+            && let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text)
+            && let Some(xh) = doc.get("x-hearth")
+        {
+            if let Some(t) = xh.get("title").and_then(|t| t.as_str()) {
+                title = t.to_string();
+            }
+            icon = xh.get("icon").and_then(|t| t.as_str()).map(str::to_string);
+            if let Some(w) = super::engine::web_of(text) {
+                let scheme = xh
+                    .get("web")
+                    .and_then(|w| w.get("scheme"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("http");
+                web_url = Some(format!("{scheme}://{}:{}{}", state.hostname, w.port, w.path));
+            }
+        }
+    }
 
     let states: Vec<&str> = g.containers.iter().map(|c| c.state.as_str()).collect();
     Enriched {
@@ -357,8 +394,8 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
             title,
             managed_by: g.managed_by,
             endpoint: g.endpoint.clone(),
-            // Nothing is writable in this milestone; adopted Hearth apps become writable later.
-            read_only: true,
+            // Only apps whose files Hearth manages can be changed.
+            read_only: !(g.managed_by == ManagedBy::Hearth && g.endpoint == DockerEndpoint::Root),
             state: app_state(&states),
             health: app_health(&healths),
             memory_bytes: total_mem,

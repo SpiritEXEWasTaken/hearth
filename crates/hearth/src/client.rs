@@ -28,6 +28,10 @@ impl Client {
         self.call(http::Method::POST, path, body).await
     }
 
+    pub async fn call_put<T: DeserializeOwned>(&self, path: &str, body: Value) -> Result<T, Error> {
+        self.call(http::Method::PUT, path, Some(body)).await
+    }
+
     pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
         self.call(http::Method::DELETE, path, None).await
     }
@@ -83,7 +87,7 @@ fn exit_for_kind(kind: &str) -> ExitCode {
         "usage" => ExitCode::Usage,
         "not_found" => ExitCode::NotFound,
         "needs_confirmation" => ExitCode::NeedsConfirmation,
-        "unauthorized" => ExitCode::Unauthorized,
+        "unauthorized" | "read_only" => ExitCode::Unauthorized,
         "rolled_back" => ExitCode::RolledBack,
         "rollback_failed" => ExitCode::RollbackFailed,
         _ => ExitCode::Error,

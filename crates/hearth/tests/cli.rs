@@ -40,11 +40,25 @@ fn daemon_not_running_is_a_clear_json_error() {
 }
 
 #[test]
-fn applying_updates_is_not_implemented_yet() {
-    let out = hearth(&["app", "update", "jellyfin", "--json", "--socket", "/nonexistent"]);
-    assert_eq!(out.status.code(), Some(1));
+fn changes_without_a_terminal_need_yes() {
+    // stdin is not a terminal here, so `stop` must refuse with exit code 4 instead of prompting,
+    // before it even contacts the daemon.
+    let out = hearth(&["app", "stop", "jellyfin", "--json", "--socket", "/nonexistent"]);
+    assert_eq!(out.status.code(), Some(4));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-    assert_eq!(v["error"]["kind"], "not_implemented");
+    assert_eq!(v["error"]["kind"], "needs_confirmation");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--yes")
+    );
+}
+
+#[test]
+fn update_all_without_check_is_refused() {
+    let out = hearth(&["app", "update", "--all", "--json", "--socket", "/nonexistent"]);
+    assert_eq!(out.status.code(), Some(2));
 }
 
 #[test]

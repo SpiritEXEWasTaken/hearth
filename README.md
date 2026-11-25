@@ -4,9 +4,10 @@ A lightweight home-server manager: Docker Compose apps, a curated app store, OS 
 files, storage, users and a web terminal. It's one static Rust binary, has a web UI and an Android app, and
 uses under 30 MB of RAM when idle.
 
-> **Status: early development (milestone M1: read-only).** Hearth can show your apps (CasaOS,
-> compose and rootless Docker), their state, health, memory, running and latest versions, and logs.
-> It doesn't change anything yet.
+> **Status: early development (milestone M2: app engine).** Hearth shows every app (CasaOS, compose,
+> rootless Docker) with state, health, memory and versions, and manages its own apps: install from a
+> compose file, start/stop (stop persists), apply changes, update, revert, back up and restore, all
+> with health checks and automatic rollback. CasaOS apps stay read-only until migration (M3).
 
 ## Goals
 
@@ -56,7 +57,7 @@ uses under 30 MB of RAM when idle.
 
 | Process | Runs as | Does |
 |---|---|---|
-| `hearth helper` | root | Only a fixed list of typed read operations (list and inspect containers and images, read logs, read CasaOS app files). Accepts connections only from root and the `hearth` user. |
+| `hearth helper` | root | Only a fixed list of typed operations: reading Docker and CasaOS files, running `docker compose` with fixed command lines for Hearth apps, writing app files (with history), tagging and removing images, backups. Accepts connections only from root and the `hearth` user. |
 | `hearth daemon` | `hearth` | The API on `/run/hearth/hearth.sock` (group `hearth`), registry checks, stats, SQLite state |
 | `hearth <command>` | you | The CLI. Members of the `hearth` group can read without sudo. Changes need a scoped token. |
 

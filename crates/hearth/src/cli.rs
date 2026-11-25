@@ -65,6 +65,54 @@ pub enum Command {
     /// Commands about one app.
     #[command(subcommand)]
     App(AppCmd),
+    /// Install an app from a compose file (it's normalised and checked against this host first).
+    Install {
+        /// The app's name (lowercase letters, digits, '-', '_').
+        #[arg(long)]
+        name: String,
+        /// The compose file.
+        #[arg(long, short = 'f')]
+        file: PathBuf,
+        /// Values for variables in the file (KEY=VALUE). Repeat for several.
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        sets: Vec<String>,
+        /// Create the containers but don't start them.
+        #[arg(long)]
+        no_start: bool,
+    },
+    /// Remove an app. Its data is kept unless you add --delete-data.
+    Uninstall {
+        app: String,
+        /// Also delete its named volumes and data folders under /DATA/AppData/<app>.
+        #[arg(long)]
+        delete_data: bool,
+    },
+    /// Back up an app's files and data (stops it briefly unless --no-stop).
+    Backup {
+        app: String,
+        /// Leave out a container path (e.g. a big media folder). Repeat for several.
+        #[arg(long = "exclude", value_name = "CONTAINER_PATH")]
+        exclude: Vec<String>,
+        /// Don't stop the app while backing up (faster, but databases may be inconsistent).
+        #[arg(long)]
+        no_stop: bool,
+    },
+    /// List an app's backups.
+    Backups { app: String },
+    /// Restore an app from one of its backups (current data is moved aside, not deleted).
+    Restore { app: String, file: String },
+    /// Docker images: list, or clean up.
+    #[command(subcommand)]
+    Images(ImagesCmd),
+    /// Show running and recent jobs, or follow one.
+    #[command(subcommand)]
+    Job(JobCmd),
+    /// Show or change settings (image_retention, backup_retention, health_timeout).
+    Settings {
+        /// `KEY VALUE` to change a setting (needs root or an admin token).
+        #[arg(num_args = 0..=2)]
+        set: Vec<String>,
+    },
     /// API tokens (for Claude, scripts and the Android app). Needs root or an admin token.
     #[command(subcommand)]
     Token(TokenCmd),
@@ -108,24 +156,66 @@ pub enum AppCmd {
         #[arg(long)]
         since: Option<u64>,
     },
-    /// Check for (and later apply) updates. Exit code 10 means updates are available.
+    /// Update an app's images (same tag, newer build), with a health check and automatic
+    /// rollback. With --check: only look (exit code 10 means updates are available).
     Update {
         /// The app to update.
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         app: Option<String>,
-        /// All apps.
+        /// All apps (only with --check; updates are applied one app at a time, by name).
         #[arg(long)]
         all: bool,
         /// Only check, change nothing.
         #[arg(long)]
         check: bool,
     },
-    /// Start an app (milestone M2).
+    /// Start an app (and keep it running after reboots).
     Start { app: String },
-    /// Stop an app and keep it stopped (milestone M2).
+    /// Stop an app and keep it stopped, also after reboots, until you start it.
     Stop { app: String },
-    /// Restart an app (milestone M2).
+    /// Restart an app.
     Restart { app: String },
+    /// Apply a changed compose file: shows the diff, recreates what changed, checks health,
+    /// rolls back if it fails.
+    Apply {
+        app: String,
+        #[arg(long, short = 'f')]
+        file: PathBuf,
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        sets: Vec<String>,
+        /// A note for the history.
+        #[arg(long, short = 'm')]
+        message: Option<String>,
+    },
+    /// The app's file history (every change is a revision).
+    History { app: String },
+    /// Go back to an earlier revision of the app's files.
+    Revert { app: String, revision: u32 },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ImagesCmd {
+    /// All images in the root Docker, with size and whether they're used.
+    List,
+    /// Remove old rollback images (beyond the retention setting) and unused untagged images.
+    Prune {
+        /// Rollback images to keep per app service.
+        #[arg(long)]
+        keep: Option<u64>,
+        /// Also remove tagged images that no container uses.
+        #[arg(long)]
+        unused: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum JobCmd {
+    /// Running and recent jobs.
+    List,
+    /// Follow a job until it finishes (exit code reflects its result).
+    Wait { id: String },
+    /// A job's full log and result.
+    Show { id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -153,6 +243,12 @@ pub struct DaemonArgs {
     /// Seconds between background registry checks.
     #[arg(long, default_value_t = 6 * 3600)]
     pub check_interval: u64,
+    /// Value for PUID in compose files that expect one.
+    #[arg(long, default_value_t = 1000)]
+    pub puid: u32,
+    /// Value for PGID in compose files that expect one.
+    #[arg(long, default_value_t = 1000)]
+    pub pgid: u32,
 }
 
 #[derive(Debug, Args)]
@@ -166,6 +262,8 @@ pub struct HelperArgs {
     pub docker_socket: PathBuf,
     #[arg(long, default_value = "/var/lib/casaos/apps")]
     pub casaos_apps_dir: PathBuf,
+    #[arg(long, default_value = "/usr/bin/docker")]
+    pub docker_bin: PathBuf,
 }
 
 #[cfg(test)]

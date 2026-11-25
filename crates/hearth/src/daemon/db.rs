@@ -49,7 +49,50 @@ const MIGRATIONS: &[&str] = &[
         tags TEXT NOT NULL,
         fetched_at INTEGER NOT NULL
      );",
+    // 2: jobs (audit log), desired app state, settings
+    "CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        app TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        error TEXT,
+        events TEXT NOT NULL
+     );
+     CREATE INDEX jobs_app ON jobs (app, started_at);
+     CREATE TABLE app_state (
+        app TEXT PRIMARY KEY,
+        desired TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+     );
+     CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+     );",
 ];
+
+/// Settings with their defaults.
+pub const SETTINGS: &[(&str, &str, &str)] = &[
+    (
+        "image_retention",
+        "1",
+        "rollback images kept per app service after a successful update",
+    ),
+    ("backup_retention", "5", "backups kept per app"),
+    (
+        "health_timeout",
+        "300",
+        "seconds an app may take to become healthy after a change",
+    ),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Desired {
+    Running,
+    Stopped,
+}
 
 pub fn now() -> i64 {
     std::time::SystemTime::now()
@@ -222,6 +265,114 @@ impl Db {
     }
 }
 
+impl Db {
+    // ----- jobs -----
+
+    pub fn save_job(&self, job: &hearth_core::model::Job, actor: &str) -> rusqlite::Result<()> {
+        let status = serde_json::to_value(job.status)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO jobs (id, kind, app, actor, status, started_at, finished_at, error, events)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                job.id,
+                job.kind,
+                job.app,
+                actor,
+                status,
+                job.started_at,
+                job.finished_at,
+                job.error,
+                serde_json::to_string(&job.events).unwrap_or_default()
+            ],
+        )?;
+        // Keep the audit log bounded.
+        self.conn.execute(
+            "DELETE FROM jobs WHERE id NOT IN (SELECT id FROM jobs ORDER BY started_at DESC LIMIT 1000)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    // ----- desired state -----
+
+    pub fn desired(&self, app: &str) -> rusqlite::Result<Option<Desired>> {
+        let v: Option<String> = self
+            .conn
+            .query_row("SELECT desired FROM app_state WHERE app = ?1", [app], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v.map(|s| {
+            if s == "stopped" {
+                Desired::Stopped
+            } else {
+                Desired::Running
+            }
+        }))
+    }
+
+    pub fn set_desired(&self, app: &str, d: Desired) -> rusqlite::Result<()> {
+        let v = match d {
+            Desired::Running => "running",
+            Desired::Stopped => "stopped",
+        };
+        self.conn.execute(
+            "INSERT OR REPLACE INTO app_state (app, desired, updated_at) VALUES (?1, ?2, ?3)",
+            params![app, v, now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn forget_app(&self, app: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM app_state WHERE app = ?1", [app])?;
+        Ok(())
+    }
+
+    // ----- settings -----
+
+    pub fn setting(&self, key: &str) -> String {
+        let stored: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .optional()
+            .ok()
+            .flatten();
+        stored.unwrap_or_else(|| {
+            SETTINGS
+                .iter()
+                .find(|(k, _, _)| *k == key)
+                .map(|(_, d, _)| d.to_string())
+                .unwrap_or_default()
+        })
+    }
+
+    pub fn setting_u64(&self, key: &str) -> u64 {
+        self.setting(key).parse().unwrap_or(0)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        if !SETTINGS.iter().any(|(k, _, _)| *k == key) {
+            return Err(format!(
+                "unknown setting '{key}' (known: {})",
+                SETTINGS.iter().map(|(k, _, _)| *k).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        if value.parse::<u64>().is_err() {
+            return Err(format!("{key} must be a whole number"));
+        }
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +451,18 @@ mod tests {
         let p = tmp.path().join("h.db");
         assert!(Db::open(&p).is_ok());
         assert!(Db::open(&p).is_ok(), "re-opening must not re-run migrations");
+    }
+
+    #[test]
+    fn desired_state_and_settings() {
+        let db = db();
+        assert_eq!(db.desired("x").ok().flatten(), None);
+        assert!(db.set_desired("x", Desired::Stopped).is_ok());
+        assert_eq!(db.desired("x").ok().flatten(), Some(Desired::Stopped));
+        assert_eq!(db.setting_u64("image_retention"), 1, "default");
+        assert!(db.set_setting("image_retention", "3").is_ok());
+        assert_eq!(db.setting_u64("image_retention"), 3);
+        assert!(db.set_setting("nope", "1").is_err());
+        assert!(db.set_setting("backup_retention", "many").is_err());
     }
 }

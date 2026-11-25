@@ -1,11 +1,12 @@
 //! `hearth helper`: the small privileged process.
 //!
-//! It runs as root (it needs the root Docker socket, users' rootless Docker sockets and the
-//! root-only CasaOS files) and answers only the typed, read-only operations in
-//! [`hearth_core::proto::Request`]. Connections are accepted only from root and from the
+//! It runs as root (it needs the root Docker socket, users' rootless Docker sockets, the
+//! root-only CasaOS files and Hearth's app folders) and answers only the typed operations in
+//! [`hearth_core::proto::Request`]. Changes are limited to Hearth-managed apps (root Docker,
+//! `/var/lib/hearth/apps`); everything else is read-only. Connections are accepted only from root and from the
 //! Hearth daemon's user, checked with the kernel's peer credentials (SO_PEERCRED).
 
-use crate::unixhttp;
+use crate::{helper_apps, unixhttp};
 use hearth_core::model::DockerEndpoint;
 use hearth_core::proto::{self, LogRecord, Logs, Request, Response};
 use serde_json::Value;
@@ -14,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 
 const MAX_REQUEST_LINE: u64 = 64 * 1024;
@@ -29,6 +31,13 @@ pub struct HelperConfig {
     /// Directory holding per-user runtime dirs (`/run/user`), for rootless Docker sockets.
     pub user_runtime_dir: PathBuf,
     pub casaos_apps_dir: PathBuf,
+    /// The daemon's group: app folders and compose files are readable by it.
+    pub daemon_gid: Option<u32>,
+    pub apps_dir: PathBuf,
+    pub removed_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub backups_dir: PathBuf,
+    pub docker_bin: PathBuf,
 }
 
 impl Default for HelperConfig {
@@ -39,6 +48,12 @@ impl Default for HelperConfig {
             docker_socket: "/run/docker.sock".into(),
             user_runtime_dir: "/run/user".into(),
             casaos_apps_dir: "/var/lib/casaos/apps".into(),
+            daemon_gid: None,
+            apps_dir: "/var/lib/hearth/apps".into(),
+            removed_dir: "/var/lib/hearth/removed".into(),
+            data_dir: "/var/lib/hearth/data".into(),
+            backups_dir: "/var/backups/hearth".into(),
+            docker_bin: "/usr/bin/docker".into(),
         }
     }
 }
@@ -88,21 +103,78 @@ async fn serve_conn(stream: UnixStream, cfg: &HelperConfig) -> std::io::Result<(
         }
         let resp = match serde_json::from_slice::<Request>(&line) {
             Ok(req) => {
-                tracing::debug!(?req, uid, "helper request");
-                handle(req, cfg).await
+                log_request(&req, uid);
+                let mut out = Out { w: &mut w, ok: true };
+                let resp = handle(req, cfg, &mut out).await;
+                if !out.ok {
+                    return Ok(()); // the daemon went away mid-operation
+                }
+                resp
             }
             Err(e) => Response::Err {
                 message: format!("bad request: {e}"),
             },
         };
-        let mut out = serde_json::to_vec(&resp)
-            .unwrap_or_else(|_| b"{\"status\":\"err\",\"message\":\"encode\"}".to_vec());
-        out.push(b'\n');
-        w.write_all(&out).await?;
+        write_response(&mut w, &resp).await?;
     }
 }
 
-async fn handle(req: Request, cfg: &HelperConfig) -> Response {
+async fn write_response(w: &mut OwnedWriteHalf, resp: &Response) -> std::io::Result<()> {
+    let mut out =
+        serde_json::to_vec(resp).unwrap_or_else(|_| b"{\"status\":\"err\",\"message\":\"encode\"}".to_vec());
+    out.push(b'\n');
+    w.write_all(&out).await
+}
+
+/// Streams progress lines to the daemon during a long operation.
+pub struct Out<'a> {
+    w: &'a mut OwnedWriteHalf,
+    ok: bool,
+}
+
+impl Out<'_> {
+    pub async fn progress(&mut self, line: &str) {
+        if !self.ok {
+            return;
+        }
+        let resp = Response::Progress {
+            line: line.chars().take(2000).collect(),
+        };
+        if write_response(self.w, &resp).await.is_err() {
+            self.ok = false;
+        }
+    }
+}
+
+/// Changes are logged at info level (they end up in the journal as an audit trail).
+fn log_request(req: &Request, uid: u32) {
+    match req {
+        Request::WriteAppFiles {
+            app, message, actor, ..
+        } => {
+            tracing::info!(uid, app, actor, message, "write app files")
+        }
+        Request::Compose {
+            app,
+            action,
+            services,
+        } => {
+            tracing::info!(uid, app, ?action, ?services, "docker compose")
+        }
+        Request::RemoveAppDir { app } => tracing::info!(uid, app, "remove app folder"),
+        Request::TagImage { source, repo, tag } => tracing::info!(uid, source, repo, tag, "tag image"),
+        Request::RemoveImage { name } => tracing::info!(uid, name, "remove image"),
+        Request::DeleteAppData { app, volumes, paths } => {
+            tracing::info!(uid, app, ?volumes, ?paths, "delete app data")
+        }
+        Request::CreateBackup { app, .. } => tracing::info!(uid, app, "create backup"),
+        Request::RestoreBackup { app, file } => tracing::info!(uid, app, file, "restore backup"),
+        Request::PruneBackups { app, keep } => tracing::info!(uid, app, keep, "prune backups"),
+        other => tracing::debug!(?other, uid, "helper request"),
+    }
+}
+
+async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response {
     let result: Result<Value, String> = match req {
         Request::Ping => Ok(Value::String("pong".into())),
         Request::ListEndpoints => Ok(serde_json::to_value(list_endpoints(cfg)).unwrap_or(Value::Null)),
@@ -131,6 +203,39 @@ async fn handle(req: Request, cfg: &HelperConfig) -> Response {
         } => container_logs(cfg, &endpoint, &id, tail, since).await,
         Request::ListCasaosApps => list_casaos_apps(&cfg.casaos_apps_dir),
         Request::ReadCasaosApp { name } => read_casaos_app(&cfg.casaos_apps_dir, &name).await,
+        Request::ListHearthApps => helper_apps::list_apps(cfg),
+        Request::ReadAppFiles { app, include_env } => helper_apps::read_files(cfg, &app, include_env),
+        Request::WriteAppFiles {
+            app,
+            compose,
+            env,
+            message,
+            actor,
+        } => helper_apps::write_files(cfg, &app, &compose, &env, &message, &actor),
+        Request::ListHistory { app } => helper_apps::list_history(cfg, &app),
+        Request::ReadRevision { app, revision } => helper_apps::read_revision(cfg, &app, revision),
+        Request::RemoveAppDir { app } => helper_apps::remove_app_dir(cfg, &app),
+        Request::Compose {
+            app,
+            action,
+            services,
+        } => helper_apps::compose(cfg, &app, &action, &services, out).await,
+        Request::ComposeConfig { app } => helper_apps::compose_config(cfg, &app).await,
+        Request::ValidateCompose { app, compose, env } => {
+            helper_apps::validate(cfg, &app, &compose, &env).await
+        }
+        Request::TagImage { source, repo, tag } => helper_apps::tag_image(cfg, &source, &repo, &tag).await,
+        Request::RemoveImage { name } => helper_apps::remove_image(cfg, &name).await,
+        Request::ListImages => helper_apps::list_images(cfg).await,
+        Request::DeleteAppData { app, volumes, paths } => {
+            helper_apps::delete_data(cfg, &app, &volumes, &paths, out).await
+        }
+        Request::CreateBackup { app, exclude_targets } => {
+            helper_apps::create_backup(cfg, &app, &exclude_targets, out).await
+        }
+        Request::ListBackups { app } => helper_apps::list_backups(cfg, &app),
+        Request::RestoreBackup { app, file } => helper_apps::restore_backup(cfg, &app, &file, out).await,
+        Request::PruneBackups { app, keep } => helper_apps::prune_backups(cfg, &app, keep),
     };
     match result {
         Ok(data) => Response::Ok { data },

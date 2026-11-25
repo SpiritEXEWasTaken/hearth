@@ -1,10 +1,14 @@
 //! `hearth daemon`: the unprivileged service behind the CLI (and later the web UI and app).
 
 mod api;
+mod api_changes;
 pub mod apps;
 mod auth;
 pub mod db;
+mod engine;
+mod health;
 mod helper_client;
+mod jobs;
 pub mod stats;
 mod versions;
 
@@ -25,6 +29,9 @@ pub struct DaemonConfig {
     pub first_check_delay: Duration,
     /// Interval between background version checks.
     pub check_interval: Duration,
+    /// Values for `PUID`/`PGID` when a compose file expects them.
+    pub puid: u32,
+    pub pgid: u32,
 }
 
 impl Default for DaemonConfig {
@@ -35,6 +42,8 @@ impl Default for DaemonConfig {
             state_dir: "/var/lib/hearth".into(),
             first_check_delay: Duration::from_secs(120),
             check_interval: Duration::from_secs(6 * 3600),
+            puid: 1000,
+            pgid: 1000,
         }
     }
 }
@@ -46,6 +55,33 @@ pub struct State {
     registry: Arc<RegistryClient>,
     hostname: String,
     check_lock: Arc<tokio::sync::Mutex<()>>,
+    jobs: Arc<jobs::Jobs>,
+    host: Arc<HostDefaults>,
+}
+
+/// Values filled into compose files that expect a manager to provide them.
+#[derive(Debug, Clone)]
+pub struct HostDefaults {
+    pub puid: u32,
+    pub pgid: u32,
+    pub tz: String,
+}
+
+/// The host's time zone: /etc/timezone, else the /etc/localtime link, else UTC.
+pub fn host_timezone() -> String {
+    if let Ok(t) = std::fs::read_to_string("/etc/timezone") {
+        let t = t.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    std::fs::read_link("/etc/localtime")
+        .ok()
+        .and_then(|p| {
+            let s = p.to_string_lossy().into_owned();
+            s.split_once("zoneinfo/").map(|(_, z)| z.to_string())
+        })
+        .unwrap_or_else(|| "UTC".to_string())
 }
 
 impl State {
@@ -69,6 +105,12 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
             .map(|h| h.trim().to_string())
             .unwrap_or_else(|_| "localhost".into()),
         check_lock: Arc::new(tokio::sync::Mutex::new(())),
+        jobs: Arc::new(jobs::Jobs::default()),
+        host: Arc::new(HostDefaults {
+            puid: cfg.puid,
+            pgid: cfg.pgid,
+            tz: host_timezone(),
+        }),
     };
 
     if let Some(dir) = cfg.socket.parent() {
@@ -85,6 +127,13 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         Ok(_) => tracing::info!("helper reachable"),
         Err(e) => tracing::warn!("helper not reachable yet: {e}"),
     }
+
+    // Make Hearth apps match their desired state once Docker has settled after a boot.
+    let st = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        engine::reconcile(&st).await;
+    });
 
     tokio::spawn(versions::scheduler(
         state.clone(),

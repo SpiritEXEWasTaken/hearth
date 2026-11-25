@@ -1,9 +1,12 @@
 //! `hearth`: one binary for the CLI, the daemon (`hearth daemon`) and the root helper (`hearth helper`).
 
+mod changes;
 mod cli;
 mod client;
+mod compose_norm;
 mod daemon;
 mod helper;
+mod helper_apps;
 mod render;
 mod unixhttp;
 mod users;
@@ -62,6 +65,9 @@ fn out<T: Serialize>(json: bool, data: &T, human: impl FnOnce(&T)) {
 async fn run(cli: &Cli) -> Result<ExitCode, Error> {
     let g = &cli.global;
     let json = g.json;
+    if let Some(result) = changes::run(&cli.command, g).await {
+        return result;
+    }
     match &cli.command {
         Command::Version => {
             let info = VersionInfo::current();
@@ -139,6 +145,8 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 helper_socket: a.helper_socket.clone(),
                 state_dir: a.state_dir.clone(),
                 check_interval: Duration::from_secs(a.check_interval.max(600)),
+                puid: a.puid,
+                pgid: a.pgid,
                 ..Default::default()
             };
             daemon::run(cfg).await.map_err(Error::Other)?;
@@ -154,10 +162,14 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 daemon_uid,
                 docker_socket: a.docker_socket.clone(),
                 casaos_apps_dir: a.casaos_apps_dir.clone(),
+                daemon_gid: users::primary_gid_of(&a.daemon_user),
+                docker_bin: a.docker_bin.clone(),
                 ..Default::default()
             };
             helper::run(cfg).await?;
         }
+        // Change commands are handled by `changes::run` above.
+        _ => return Err(Error::Usage("unsupported command".into())),
     }
     Ok(ExitCode::Ok)
 }
@@ -196,12 +208,7 @@ async fn app(cli: &Cli, cmd: &AppCmd) -> Result<ExitCode, Error> {
             let lines: Vec<LogLine> = c.get(&path).await?;
             out(json, &lines, |l| render::logs(l));
         }
-        AppCmd::Update { app, all: _, check } => {
-            if !*check {
-                return Err(Error::NotImplemented(
-                    "applying updates (milestone M2); use --check to look",
-                ));
-            }
+        AppCmd::Update { app, .. } => {
             let path = match app {
                 Some(a) => format!("/v1/versions/check?app={}", urlencode(a)),
                 None => "/v1/versions/check".to_string(),
@@ -232,9 +239,8 @@ async fn app(cli: &Cli, cmd: &AppCmd) -> Result<ExitCode, Error> {
                 ExitCode::Ok
             });
         }
-        AppCmd::Start { .. } | AppCmd::Stop { .. } | AppCmd::Restart { .. } => {
-            return Err(Error::NotImplemented("start/stop/restart (milestone M2)"));
-        }
+        // Changes are handled by `changes::run`.
+        _ => return Err(Error::Usage("unsupported command".into())),
     }
     Ok(ExitCode::Ok)
 }
