@@ -1,0 +1,223 @@
+//! The API data model, shared by the daemon (producer) and the CLI, web UI and Android app (consumers).
+//!
+//! Field names are part of the `--json` contract: add fields freely, never rename or remove them.
+
+use serde::{Deserialize, Serialize};
+
+/// `GET /v1/status`: host summary plus every app.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Status {
+    pub host: HostStats,
+    pub apps: Vec<AppSummary>,
+    /// Problems worth showing (e.g. "rootless Docker for uid 1000 not reachable").
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HostStats {
+    pub hostname: String,
+    pub os: String,
+    pub kernel: String,
+    pub arch: String,
+    pub uptime_secs: u64,
+    pub load: [f64; 3],
+    pub cpu_count: u32,
+    /// CPU busy percentage over a short sample (0–100).
+    pub cpu_percent: f64,
+    pub memory: MemoryStats,
+    /// Memory pressure (PSI "some" avg60, percent of time stalled), if the kernel exposes it.
+    pub memory_pressure_avg60: Option<f64>,
+    /// Out-of-memory kills since boot.
+    pub oom_kills: Option<u64>,
+    pub disks: Vec<DiskStats>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryStats {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub used_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_used_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskStats {
+    pub mount: String,
+    pub device: String,
+    pub fs_type: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// Which Docker daemon an app runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DockerEndpoint {
+    /// The system (root) daemon, `/run/docker.sock`.
+    Root,
+    /// A user's rootless daemon, `/run/user/<uid>/docker.sock`.
+    Rootless { uid: u32 },
+}
+
+impl DockerEndpoint {
+    pub fn label(&self) -> String {
+        match self {
+            DockerEndpoint::Root => "root".into(),
+            DockerEndpoint::Rootless { uid } => format!("rootless:{uid}"),
+        }
+    }
+}
+
+/// Who manages an app today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedBy {
+    /// Managed by Hearth.
+    Hearth,
+    /// A CasaOS app (compose project under /var/lib/casaos/apps), not yet adopted.
+    Casaos,
+    /// A compose project Hearth doesn't manage.
+    Compose,
+    /// A single container that isn't part of a compose project.
+    Container,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppState {
+    Running,
+    /// Some containers running, some not.
+    Partial,
+    Stopped,
+    /// Created/restarting/dead or otherwise not settled.
+    Unhealthy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSummary {
+    /// Stable id: the compose project name (or container name for single containers).
+    pub id: String,
+    pub title: String,
+    pub managed_by: ManagedBy,
+    pub endpoint: DockerEndpoint,
+    /// Hearth can change this app (false for rootless/external apps until you opt in).
+    pub read_only: bool,
+    pub state: AppState,
+    /// "healthy", "unhealthy", "starting", or None when no container has a healthcheck.
+    pub health: Option<String>,
+    pub memory_bytes: Option<u64>,
+    pub web_url: Option<String>,
+    pub icon: Option<String>,
+    pub containers: Vec<ContainerSummary>,
+    pub images: Vec<ImageVersion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerSummary {
+    pub id: String,
+    pub name: String,
+    /// Compose service name, if any.
+    pub service: Option<String>,
+    /// Docker state: running, exited, created, restarting, paused, dead.
+    pub state: String,
+    /// Docker's human status, e.g. "Up 3 hours (healthy)".
+    pub status: String,
+    pub health: Option<String>,
+    pub image: String,
+    pub memory_bytes: Option<u64>,
+    pub restart_count: Option<u64>,
+    pub started_at: Option<String>,
+}
+
+/// Version information for one service's image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageVersion {
+    pub service: String,
+    /// The image reference as written in the compose file, e.g. `linuxserver/jellyfin:latest`.
+    pub reference: String,
+    /// The manifest (index) digest the running image was pulled as.
+    pub running_digest: Option<String>,
+    /// Human-readable running version from image labels, e.g. "10.11.2".
+    pub running_version: Option<String>,
+    /// Result of the last registry check, if any.
+    pub latest: Option<LatestInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestInfo {
+    /// Unix seconds of the check.
+    pub checked_at: i64,
+    /// Digest the same tag points to now.
+    pub digest: Option<String>,
+    /// Human-readable version of `digest`, from its image labels.
+    pub version: Option<String>,
+    /// True when the tag now points to a different image than the one running.
+    pub update_available: bool,
+    /// A newer tag on the same track (e.g. `v3.4.2` when running `v3.4.1`). Never applied automatically.
+    pub newer_in_track: Option<String>,
+    /// A newer major version tag (e.g. `v4` when running `v3`). Informational only.
+    pub newer_major: Option<String>,
+    /// Why the check failed, if it did.
+    pub error: Option<String>,
+}
+
+/// `GET /v1/apps/{id}`: one app with details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppDetail {
+    #[serde(flatten)]
+    pub summary: AppSummary,
+    /// Compose project working directory, if known.
+    pub working_dir: Option<String>,
+    /// Compose files used, if known.
+    pub config_files: Vec<String>,
+    /// Variables the compose file needs from outside (e.g. `PUID`, `AppID`): it won't run with
+    /// plain `docker compose` unless these are provided. Empty for self-contained files.
+    pub external_variables: Vec<String>,
+    /// Devices listed in the compose file that don't exist on this host.
+    pub missing_devices: Vec<String>,
+    /// CasaOS store id, if the app came from a CasaOS store.
+    pub store_app_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogLine {
+    pub service: String,
+    /// "stdout" or "stderr".
+    pub stream: String,
+    pub line: String,
+}
+
+/// A newly created API token. The secret is shown exactly once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewToken {
+    pub id: String,
+    pub name: String,
+    pub scopes: Vec<String>,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub id: String,
+    pub name: String,
+    pub scopes: Vec<String>,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// Token scopes. A token can only do what its scopes allow; `admin` implies all.
+pub mod scopes {
+    pub const READ: &str = "read";
+    pub const APPS_WRITE: &str = "apps:write";
+    pub const SYSTEM_WRITE: &str = "system:write";
+    pub const TERMINAL: &str = "terminal";
+    pub const ADMIN: &str = "admin";
+    pub const ALL: &[&str] = &[READ, APPS_WRITE, SYSTEM_WRITE, TERMINAL, ADMIN];
+
+    pub fn is_valid(s: &str) -> bool {
+        ALL.contains(&s)
+    }
+}

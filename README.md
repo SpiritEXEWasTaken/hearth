@@ -4,7 +4,9 @@ A lightweight home-server manager: Docker Compose apps, a curated app store, OS 
 files, storage, users and a web terminal. It's one static Rust binary, has a web UI and an Android app, and
 uses under 30 MB of RAM when idle.
 
-> **Status: early development (milestone M0).** Not usable yet.
+> **Status: early development (milestone M1: read-only).** Hearth can show your apps (CasaOS,
+> compose and rootless Docker), their state, health, memory, running and latest versions, and logs.
+> It doesn't change anything yet.
 
 ## Goals
 
@@ -26,8 +28,13 @@ uses under 30 MB of RAM when idle.
 
 | Path | What |
 |---|---|
-| `crates/hearth-core` | Shared types: errors, exit codes, JSON output |
+| `crates/hearth-core` | Shared types: errors, exit codes, JSON output, API model, helper protocol, secret redaction |
+| `crates/hearth-registry` | OCI registry client: tag digests, version labels, tag tracks |
+| `crates/hearth-casaos` | Readers for CasaOS app files, `x-casaos` metadata and store layouts |
 | `crates/hearth` | The `hearth` binary: CLI, daemon (`hearth daemon`) and root helper (`hearth helper`) |
+| `packaging/` | systemd units, `install.sh`, the Claude Code skill |
+| `docs/agent-guide.md` | How AI agents and scripts should use the CLI safely |
+| `ci/smoke.sh` | End-to-end test against a real Docker, with the idle-memory budget |
 | `ui/` | SvelteKit web UI, compiled to static files embedded in the binary (later milestone) |
 | `android/` | Kotlin + Jetpack Compose app (later milestone) |
 
@@ -45,12 +52,29 @@ uses under 30 MB of RAM when idle.
 | 7 | Health check failed, rollback also failed |
 | 10 | Updates available (with `--check`) |
 
+## How it runs
+
+| Process | Runs as | Does |
+|---|---|---|
+| `hearth helper` | root | Only a fixed list of typed read operations (list and inspect containers and images, read logs, read CasaOS app files). Accepts connections only from root and the `hearth` user. |
+| `hearth daemon` | `hearth` | The API on `/run/hearth/hearth.sock` (group `hearth`), registry checks, stats, SQLite state |
+| `hearth <command>` | you | The CLI. Members of the `hearth` group can read without sudo. Changes need a scoped token. |
+
+Idle memory for helper + daemon is about 10–15 MB, and CI fails above 30 MB.
+
+## Install (from a release binary)
+
+```sh
+sudo packaging/install.sh --binary ./hearth --add-user "$USER"
+hearth status
+```
+
 ## Building
 
 ```sh
 cargo test --workspace
 cargo build --release -p hearth                                   # native
-cargo zigbuild --release --target x86_64-unknown-linux-musl -p hearth   # static, as in CI
+cargo zigbuild --release --target x86_64-unknown-linux-musl -p hearth   # static, as in CI (needs zig)
 ```
 
 ## Licence

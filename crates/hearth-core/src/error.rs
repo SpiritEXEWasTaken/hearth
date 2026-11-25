@@ -33,6 +33,14 @@ pub enum Error {
 
     #[error("{0}")]
     Other(String),
+
+    /// An error reported by the daemon, passed through with its kind and exit code.
+    #[error("{message}")]
+    Remote {
+        kind: String,
+        message: String,
+        exit: ExitCode,
+    },
 }
 
 impl Error {
@@ -45,11 +53,12 @@ impl Error {
             Error::RolledBack(_) => ExitCode::RolledBack,
             Error::RollbackFailed(_) => ExitCode::RollbackFailed,
             Error::NotImplemented(_) | Error::Io(_) | Error::Other(_) => ExitCode::Error,
+            Error::Remote { exit, .. } => *exit,
         }
     }
 
     /// Stable, machine-readable kind for the JSON `error.kind` field.
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> &str {
         match self {
             Error::Usage(_) => "usage",
             Error::NotFound { .. } => "not_found",
@@ -60,6 +69,7 @@ impl Error {
             Error::NotImplemented(_) => "not_implemented",
             Error::Io(_) => "io",
             Error::Other(_) => "other",
+            Error::Remote { kind, .. } => kind,
         }
     }
 }
@@ -67,7 +77,7 @@ impl Error {
 /// JSON form of an error, as printed with `--json`.
 #[derive(Debug, Serialize)]
 pub struct ErrorBody {
-    pub kind: &'static str,
+    pub kind: String,
     pub message: String,
     pub exit_code: u8,
 }
@@ -75,7 +85,7 @@ pub struct ErrorBody {
 impl From<&Error> for ErrorBody {
     fn from(e: &Error) -> Self {
         ErrorBody {
-            kind: e.kind(),
+            kind: e.kind().to_string(),
             message: e.to_string(),
             exit_code: e.exit_code().code(),
         }
@@ -98,6 +108,18 @@ mod tests {
 
         let body = ErrorBody::from(&e);
         assert_eq!(body.exit_code, 3);
+    }
+
+    #[test]
+    fn remote_errors_keep_kind_and_exit_code() {
+        let e = Error::Remote {
+            kind: "not_found".into(),
+            message: "app not found: x".into(),
+            exit: ExitCode::NotFound,
+        };
+        assert_eq!(e.kind(), "not_found");
+        assert_eq!(e.exit_code(), ExitCode::NotFound);
+        assert_eq!(e.to_string(), "app not found: x");
     }
 
     #[test]

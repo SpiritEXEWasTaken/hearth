@@ -23,14 +23,27 @@ fn version_json_is_one_document_with_ok_true() {
 }
 
 #[test]
-fn not_implemented_fails_with_json_error_and_exit_1() {
-    let out = hearth(&["status", "--json"]);
+fn daemon_not_running_is_a_clear_json_error() {
+    let out = hearth(&["status", "--json", "--socket", "/nonexistent/hearth.sock"]);
     assert_eq!(out.status.code(), Some(1));
     let v: serde_json::Value = match serde_json::from_slice(&out.stdout) {
         Ok(v) => v,
         Err(e) => panic!("stdout is not JSON: {e}"),
     };
     assert_eq!(v["ok"], false);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("isn't running")
+    );
+}
+
+#[test]
+fn applying_updates_is_not_implemented_yet() {
+    let out = hearth(&["app", "update", "jellyfin", "--json", "--socket", "/nonexistent"]);
+    assert_eq!(out.status.code(), Some(1));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     assert_eq!(v["error"]["kind"], "not_implemented");
 }
 

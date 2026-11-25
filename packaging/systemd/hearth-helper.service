@@ -1,0 +1,42 @@
+[Unit]
+Description=Hearth privileged helper (read-only Docker and CasaOS access for the Hearth daemon)
+Documentation=https://github.com/SpiritEXEWasTaken/hearth
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hearth helper --daemon-user hearth
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=hearth-helper
+RuntimeDirectoryMode=0755
+
+# The helper runs as root but only needs to read: Docker sockets, /run/user/*/docker.sock and
+# /var/lib/casaos/apps. It never writes outside its runtime directory in this version.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+# CAP_DAC_OVERRIDE/READ_SEARCH: reach users' rootless sockets under /run/user/<uid> (mode 0700).
+# CAP_CHOWN: hand the helper socket to the hearth user.
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_CHOWN
+AmbientCapabilities=
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,43 @@
+[Unit]
+Description=Hearth home-server manager (daemon)
+Documentation=https://github.com/SpiritEXEWasTaken/hearth
+After=network-online.target hearth-helper.service
+Wants=network-online.target hearth-helper.service
+
+[Service]
+Type=simple
+User=hearth
+Group=hearth
+ExecStart=/usr/local/bin/hearth daemon
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=hearth
+RuntimeDirectoryMode=0750
+StateDirectory=hearth
+StateDirectoryMode=0750
+UMask=0007
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# No PrivateDevices: the daemon checks which /dev devices exist (e.g. /dev/dri for Jellyfin).
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+# Hard ceiling; normal idle use is far below this.
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

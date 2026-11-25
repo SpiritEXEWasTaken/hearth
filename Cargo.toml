@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hearth-core", "crates/hearth"]
+members = ["crates/hearth-core", "crates/hearth-registry", "crates/hearth-casaos", "crates/hearth"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,10 +13,30 @@ publish = false
 
 [workspace.dependencies]
 hearth-core = { path = "crates/hearth-core" }
+hearth-registry = { path = "crates/hearth-registry" }
+hearth-casaos = { path = "crates/hearth-casaos" }
+
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml_ng = "0.10"
 thiserror = "2"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "fs", "signal", "sync"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+http = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "query"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
+rustix = { version = "1", features = ["fs"] }
+sha2 = "0.11"
+hex = "0.4"
+getrandom = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
