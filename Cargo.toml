@@ -9,6 +9,7 @@ rust-version = "1.90"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/SpiritEXEWasTaken/hearth"
 authors = ["Hearth contributors"]
+publish = false
 
 [workspace.dependencies]
 hearth-core = { path = "crates/hearth-core" }
