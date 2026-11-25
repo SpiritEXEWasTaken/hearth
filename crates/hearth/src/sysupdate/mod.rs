@@ -15,7 +15,11 @@ pub mod pacman;
 pub mod reboot;
 mod run;
 
-use hearth_core::model::{BackendInfo, SystemInfo, SystemUpdate, SystemUpdates, UpgradeResult};
+use hearth_core::model::{
+    BackendInfo, PackageDetail, PackageEntry, PackagePlan, PackageResult, SystemInfo, SystemUpdate,
+    SystemUpdates, UpgradeResult,
+};
+use hearth_core::proto::{PackageAction, is_valid_package_name};
 use std::collections::BTreeSet;
 
 /// Progress lines go here.
@@ -241,6 +245,101 @@ pub async fn upgrade(ids: &[String], security_only: bool, tx: &Tx) -> Result<Upg
         return Err(result.errors.join("; "));
     }
     Ok(result)
+}
+
+// ----- packages (M4b) -----
+
+/// The distro's own package backend on this host: `packagekit` or `pacman`.
+async fn native_backend() -> Result<String, String> {
+    let os = os_release();
+    let b = backends(&os)
+        .await
+        .into_iter()
+        .find(|b| b.kind != "flatpak")
+        .ok_or("no package backend found")?;
+    if b.available {
+        Ok(b.kind)
+    } else {
+        Err(b.note.unwrap_or_else(|| format!("{} isn't available", b.kind)))
+    }
+}
+
+fn check_names(names: &[String]) -> Result<(), String> {
+    if names.is_empty() {
+        return Err("no package names given".into());
+    }
+    match names.iter().find(|n| !is_valid_package_name(n)) {
+        Some(bad) => Err(format!("'{bad}' isn't a valid package name")),
+        None => Ok(()),
+    }
+}
+
+pub async fn package_search(terms: &[String], backend: &str) -> Result<Vec<PackageEntry>, String> {
+    check_names(terms)?;
+    let mut out = Vec::new();
+    if backend == "native" || backend == "all" {
+        match native_backend().await?.as_str() {
+            "pacman" => out.append(&mut pacman::search(terms).await?),
+            _ => out.append(&mut packagekit::search(terms).await?),
+        }
+    }
+    if (backend == "flatpak" || backend == "all") && flatpak::probe().await.is_some() {
+        match flatpak::search(terms).await {
+            Ok(mut f) => out.append(&mut f),
+            Err(e) if backend == "flatpak" => return Err(e),
+            Err(_) => {}
+        }
+    } else if backend == "flatpak" {
+        return Err("Flatpak isn't installed".into());
+    }
+    out.truncate(500);
+    Ok(out)
+}
+
+pub async fn package_info(name: &str, backend: &str) -> Result<PackageDetail, String> {
+    check_names(std::slice::from_ref(&name.to_string()))?;
+    if backend == "flatpak" {
+        return flatpak::info(name).await;
+    }
+    match native_backend().await?.as_str() {
+        "pacman" => pacman::info(name).await,
+        _ => packagekit::info(name).await,
+    }
+}
+
+/// With `simulate`, returns the plan. Otherwise makes the change and returns a
+/// [`PackageResult`], or the errors.
+pub async fn package_change(
+    action: PackageAction,
+    names: &[String],
+    backend: &str,
+    simulate: bool,
+    tx: &Tx,
+) -> Result<serde_json::Value, String> {
+    check_names(names)?;
+    let plan: PackagePlan = if backend == "flatpak" {
+        if flatpak::probe().await.is_none() {
+            return Err("Flatpak isn't installed".into());
+        }
+        flatpak::change(action, names, simulate, tx).await?
+    } else {
+        match native_backend().await?.as_str() {
+            "pacman" => pacman::change(action, names, simulate, tx).await?,
+            _ => packagekit::change(action, names, simulate, tx).await?,
+        }
+    };
+    if simulate {
+        return serde_json::to_value(plan).map_err(|e| e.to_string());
+    }
+    if !plan.errors.is_empty() {
+        return Err(plan.errors.join("; "));
+    }
+    serde_json::to_value(PackageResult {
+        action: action.as_str().into(),
+        names: names.to_vec(),
+        reboot: reboot::status(),
+    })
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

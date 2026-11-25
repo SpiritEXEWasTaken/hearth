@@ -9,8 +9,9 @@ uses under 30 MB of RAM when idle.
 > (install, start/stop that persists, apply, update, revert, backup/restore) with health checks and
 > automatic rollback. CasaOS apps can be adopted in place, without restarting them; see
 > [docs/migration-casaos.md](docs/migration-casaos.md). System updates work through PackageKit
-> (Debian/Ubuntu, Fedora, openSUSE), pacman (Arch/CachyOS) and Flatpak, and Hearth never reboots by
-> itself; see [docs/system-updates.md](docs/system-updates.md).
+> (Debian/Ubuntu, Fedora, openSUSE), pacman (Arch/CachyOS) and Flatpak, packages can be searched,
+> installed and removed (with a full plan first), and Hearth never reboots by itself; see
+> [docs/system-updates.md](docs/system-updates.md).
 
 ## Goals
 

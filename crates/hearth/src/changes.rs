@@ -436,6 +436,7 @@ pub async fn run(cmd: &Command, g: &GlobalArgs) -> Option<Result<ExitCode, Error
         Command::App(cmd) => return app(&c, g, cmd).await,
         Command::Migrate(MigrateCmd::Casaos { action }) => migrate(&c, g, action.as_ref()).await,
         Command::System(cmd) => system_cli::run(&c, g, cmd).await,
+        Command::Package(cmd) => system_cli::package(&c, g, cmd).await,
         _ => return None,
     })
 }

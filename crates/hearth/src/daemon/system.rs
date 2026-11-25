@@ -7,15 +7,16 @@ use super::api::ApiError;
 use super::auth::Principal;
 use super::db::now;
 use super::jobs::{JobError, JobHandle};
-use axum::extract::State as AxState;
+use axum::extract::{Query, State as AxState};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hearth_core::Error;
 use hearth_core::model::{
-    JobRef, SystemInfo, SystemUpdate, SystemUpdates, UpgradePlan, UpgradeResult, scopes,
+    JobRef, PackageDetail, PackageEntry, PackagePlan, SystemInfo, SystemUpdate, SystemUpdates, UpgradePlan,
+    UpgradeResult, scopes,
 };
 use hearth_core::output::Envelope;
-use hearth_core::proto::Request;
+use hearth_core::proto::{PackageAction, Request};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -70,6 +71,10 @@ pub fn routes() -> Router<State> {
         .route("/v1/system", get(get_system))
         .route("/v1/system/check", post(check))
         .route("/v1/system/upgrade", post(upgrade))
+        .route("/v1/packages/search", get(package_search))
+        .route("/v1/packages/info", get(package_info))
+        .route("/v1/packages/install", post(package_install))
+        .route("/v1/packages/remove", post(package_remove))
 }
 
 fn ok<T: serde::Serialize>(data: T) -> ApiResult<T> {
@@ -282,6 +287,238 @@ pub async fn run_upgrade(st: &State, job: &JobHandle, ids: Vec<String>) -> Resul
     Ok(json!(r))
 }
 
+// ----- packages (M4b) -----
+
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    q: String,
+    #[serde(default)]
+    backend: Option<String>,
+}
+
+fn backend_of(b: Option<&str>, default: &str) -> Result<String, Error> {
+    let b = b.unwrap_or(default);
+    if ["native", "flatpak", "all"].contains(&b) {
+        Ok(b.to_string())
+    } else {
+        Err(Error::Usage(format!(
+            "unknown backend '{b}' (native, flatpak or all)"
+        )))
+    }
+}
+
+async fn package_search(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Query(q): Query<SearchQuery>,
+) -> ApiResult<Vec<PackageEntry>> {
+    p.require(scopes::READ)?;
+    let terms: Vec<String> = q.q.split_whitespace().map(str::to_string).collect();
+    if terms.is_empty() {
+        return Err(Error::Usage("give something to search for".into()).into());
+    }
+    let backend = backend_of(q.backend.as_deref(), "all")?;
+    let v = st
+        .helper
+        .call(&Request::PackageSearch { terms, backend })
+        .await
+        .map_err(Error::Other)?;
+    ok(serde_json::from_value(v).map_err(|e| Error::Other(e.to_string()))?)
+}
+
+#[derive(Debug, Deserialize)]
+struct InfoQuery {
+    name: String,
+    #[serde(default)]
+    backend: Option<String>,
+}
+
+async fn package_info(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Query(q): Query<InfoQuery>,
+) -> ApiResult<PackageDetail> {
+    p.require(scopes::READ)?;
+    let backend = backend_of(q.backend.as_deref(), "native")?;
+    let v = st
+        .helper
+        .call(&Request::PackageInfo {
+            name: q.name.clone(),
+            backend,
+        })
+        .await
+        .map_err(|e| {
+            if e.starts_with("no package") || e.starts_with("no Flatpak app") {
+                Error::NotFound {
+                    what: "package",
+                    name: q.name.clone(),
+                }
+            } else {
+                Error::Other(e)
+            }
+        })?;
+    ok(serde_json::from_value(v).map_err(|e| Error::Other(e.to_string()))?)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ChangeBody {
+    names: Vec<String>,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    /// Removing packages the server needs to stay reachable (SSH, Docker, the kernel…) is
+    /// refused unless this is set.
+    #[serde(default)]
+    allow_critical: bool,
+}
+
+/// Packages whose removal can make the server unreachable or unbootable, or break Hearth.
+pub fn is_critical(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "openssh-server",
+        "openssh",
+        "ssh",
+        "sudo",
+        "systemd",
+        "systemd-sysv",
+        "dbus",
+        "dbus-broker",
+        "polkit",
+        "packagekit",
+        "PackageKit",
+        "docker-ce",
+        "docker",
+        "docker.io",
+        "moby-engine",
+        "containerd.io",
+        "containerd",
+        "tailscale",
+        "network-manager",
+        "NetworkManager",
+        "networkmanager",
+        "iproute2",
+        "ifupdown",
+        "netplan.io",
+        "systemd-networkd",
+        "pacman",
+        "apt",
+        "dpkg",
+        "dnf",
+        "rpm",
+        "zypper",
+        "base",
+        "glibc",
+        "libc6",
+        "bash",
+        "coreutils",
+        "linux",
+    ];
+    const PREFIX: &[&str] = &[
+        "linux-image",
+        "linux-lts",
+        "linux-cachyos",
+        "linux-zen",
+        "kernel",
+        "grub",
+        "shim",
+        "systemd-boot",
+    ];
+    EXACT.contains(&name) || PREFIX.iter().any(|p| name.starts_with(p))
+}
+
+/// Blocks a removal plan that takes critical packages with it, unless allowed.
+pub fn guard(plan: &mut PackagePlan, allow_critical: bool) {
+    let critical: Vec<String> = plan
+        .remove
+        .iter()
+        .filter(|e| is_critical(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
+    if critical.is_empty() {
+        return;
+    }
+    let msg = format!(
+        "this would remove {}, which the server needs (to stay reachable, to boot, or to run Hearth)",
+        critical.join(", ")
+    );
+    if allow_critical {
+        plan.warnings.push(msg);
+    } else {
+        plan.errors
+            .push(format!("{msg}; add --allow-critical if you really mean it"));
+    }
+}
+
+async fn package_install(st: AxState<State>, p: Principal, b: Json<ChangeBody>) -> ApiResult<Value> {
+    package_change(st, p, b, PackageAction::Install).await
+}
+
+async fn package_remove(st: AxState<State>, p: Principal, b: Json<ChangeBody>) -> ApiResult<Value> {
+    package_change(st, p, b, PackageAction::Remove).await
+}
+
+async fn package_change(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Json(b): Json<ChangeBody>,
+    action: PackageAction,
+) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    let backend = backend_of(b.backend.as_deref(), "native")?;
+    if backend == "all" {
+        return Err(Error::Usage("choose one backend: native or flatpak".into()).into());
+    }
+    let v = st
+        .helper
+        .call(&Request::PackageChange {
+            action,
+            names: b.names.clone(),
+            backend: backend.clone(),
+            simulate: true,
+        })
+        .await
+        .map_err(Error::Usage)?;
+    let mut plan: PackagePlan = serde_json::from_value(v).map_err(|e| Error::Other(e.to_string()))?;
+    guard(&mut plan, b.allow_critical);
+    if b.dry_run {
+        return ok(json!(plan));
+    }
+    p.require(scopes::SYSTEM_WRITE).map_err(|_| {
+        ApiError(Error::Unauthorized(
+            "installing or removing packages needs the 'system:write' scope: create a token with `sudo hearth token create --name NAME --scope read --scope system:write`".into(),
+        ))
+    })?;
+    if !plan.errors.is_empty() {
+        return Err(Error::Usage(plan.errors.join("; ")).into());
+    }
+    let st2 = st.clone();
+    let names = b.names.clone();
+    let kind = format!("package-{}", action.as_str());
+    let id = st
+        .jobs
+        .start(&st, &kind, LOCK, &actor(&p), move |job| async move {
+            job.log(format!("{} {}", action.as_str(), names.join(" ")));
+            let j = job.clone();
+            let v = st2
+                .helper
+                .call_stream(
+                    &Request::PackageChange {
+                        action,
+                        names,
+                        backend,
+                        simulate: false,
+                    },
+                    move |l| j.log(l),
+                )
+                .await?;
+            // Installed packages change which updates exist.
+            let _ = run_check(&st2, &job, false).await;
+            Ok(v)
+        });
+    ok(json!(JobRef { job: id }))
+}
+
 /// The `security_updates` setting: `off`, or `HH:MM` local time.
 pub fn valid_schedule(v: &str) -> bool {
     if v == "off" {
@@ -439,6 +676,42 @@ mod tests {
         };
         let p = plan(&l, &all, 1000 + 3 * 24 * 3600).expect("plan");
         assert!(p.notes.iter().any(|n| n.contains("hours old")));
+    }
+
+    #[test]
+    fn critical_packages_are_guarded() {
+        let e = |n: &str| PackageEntry {
+            backend: "packagekit".into(),
+            name: n.into(),
+            version: "1".into(),
+            arch: None,
+            repo: None,
+            installed: true,
+            summary: String::new(),
+        };
+        let mut plan = PackagePlan {
+            remove: vec![e("htop"), e("openssh-server")],
+            ..Default::default()
+        };
+        guard(&mut plan, false);
+        assert_eq!(plan.errors.len(), 1);
+        assert!(plan.errors[0].contains("openssh-server"));
+        let mut allowed = PackagePlan {
+            remove: vec![e("linux-image-amd64")],
+            ..Default::default()
+        };
+        guard(&mut allowed, true);
+        assert!(allowed.errors.is_empty());
+        assert_eq!(allowed.warnings.len(), 1);
+        let mut harmless = PackagePlan {
+            remove: vec![e("htop"), e("linuxlogo")],
+            ..Default::default()
+        };
+        guard(&mut harmless, false);
+        assert!(harmless.errors.is_empty() && harmless.warnings.is_empty());
+        assert!(is_critical("linux-cachyos-lts"));
+        assert!(is_critical("linux"));
+        assert!(!is_critical("linuxlogo"));
     }
 
     #[test]

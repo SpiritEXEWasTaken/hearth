@@ -162,6 +162,53 @@ pub enum Request {
         ids: Vec<String>,
         security_only: bool,
     },
+
+    // ----- M4b: packages -----
+    /// Searches package names. `backend`: `native` (the distro's packages), `flatpak`, or
+    /// `all`.
+    PackageSearch {
+        terms: Vec<String>,
+        backend: String,
+    },
+    /// Details of one package.
+    PackageInfo {
+        name: String,
+        backend: String,
+    },
+    /// Installs or removes packages. With `simulate`, nothing changes and the result is a
+    /// `PackagePlan`; otherwise progress is streamed and the result is a `PackageResult`.
+    PackageChange {
+        action: PackageAction,
+        names: Vec<String>,
+        backend: String,
+        simulate: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageAction {
+    Install,
+    Remove,
+}
+
+impl PackageAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackageAction::Install => "install",
+            PackageAction::Remove => "remove",
+        }
+    }
+}
+
+/// A package name or Flatpak app id Hearth passes to a package manager: letters, digits and
+/// `._+-:@/`, never starting with `-`.
+pub fn is_valid_package_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && !s.starts_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-:@/".contains(c))
 }
 
 /// What `docker compose` should do. Each maps to one fixed command line in the helper.
@@ -284,6 +331,17 @@ pub fn is_valid_app_name(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_names() {
+        assert!(is_valid_package_name("vim"));
+        assert!(is_valid_package_name("libstdc++6"));
+        assert!(is_valid_package_name("org.mozilla.firefox"));
+        assert!(is_valid_package_name("python3.13:amd64"));
+        assert!(!is_valid_package_name("--noconfirm"));
+        assert!(!is_valid_package_name("vim; rm -rf /"));
+        assert!(!is_valid_package_name(""));
+    }
 
     #[test]
     fn request_wire_format_is_tagged() {

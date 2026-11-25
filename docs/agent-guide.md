@@ -108,6 +108,11 @@ Rules for system updates:
 - A kernel update means a reboot will be needed; say so before installing.
 - On Arch, choosing one pacman update installs all of them: show the person the plan's notes.
 
+Packages: `hearth package search|info` are read-only. `hearth package install|remove` need
+`system:write`; always run `--dry-run --json` first and show the person the full `install`,
+`update` and `remove` lists. Never add `--allow-critical` yourself: it exists so that removing
+SSH, Docker, the kernel or the network stack needs the person's explicit decision.
+
 ## Migrating from CasaOS
 
 `hearth migrate casaos --json` is read-only. `backup`, `adopt <app> [--fix ID]` and `undo <app>`

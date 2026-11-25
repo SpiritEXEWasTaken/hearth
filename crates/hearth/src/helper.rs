@@ -199,6 +199,12 @@ fn log_request(req: &Request, uid: u32) {
             tracing::info!(uid, ?ids, security_only, "system upgrade")
         }
         Request::SystemUpdates { refresh: true } => tracing::info!(uid, "refresh package lists"),
+        Request::PackageChange {
+            action,
+            names,
+            backend,
+            simulate: false,
+        } => tracing::info!(uid, action = action.as_str(), ?names, backend, "package change"),
         other => tracing::debug!(?other, uid, "helper request"),
     }
 }
@@ -278,6 +284,23 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         })
         .await
         .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+        Request::PackageSearch { terms, backend } => sysupdate::package_search(&terms, &backend)
+            .await
+            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+        Request::PackageInfo { name, backend } => sysupdate::package_info(&name, &backend)
+            .await
+            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+        Request::PackageChange {
+            action,
+            names,
+            backend,
+            simulate,
+        } => {
+            with_progress(out, |tx| async move {
+                sysupdate::package_change(action, &names, &backend, simulate, &tx).await
+            })
+            .await
+        }
     };
     match result {
         Ok(data) => Response::Ok { data },

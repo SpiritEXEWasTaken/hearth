@@ -5,7 +5,8 @@
 
 use super::{Tx, reboot};
 use futures_util::StreamExt;
-use hearth_core::model::{BackendInfo, SystemUpdate};
+use hearth_core::model::{BackendInfo, PackageDetail, PackageEntry, PackagePlan, SystemUpdate};
+use hearth_core::proto::PackageAction;
 use std::collections::HashMap;
 use std::time::Duration;
 use zbus::zvariant::OwnedObjectPath;
@@ -16,8 +17,14 @@ const PATH: &str = "/org/freedesktop/PackageKit";
 const IFACE: &str = "org.freedesktop.PackageKit";
 const TX_IFACE: &str = "org.freedesktop.PackageKit.Transaction";
 
-/// `PK_FILTER_ENUM_INSTALLED` as a bitfield.
+/// `PK_FILTER_ENUM_*` as bits (checked against pkcon's calls on PackageKit 1.3).
 const FILTER_INSTALLED: u64 = 1 << 2;
+const FILTER_NOT_INSTALLED: u64 = 1 << 3;
+const FILTER_NEWEST: u64 = 1 << 16;
+const FILTER_ARCH: u64 = 1 << 18;
+const FILTER_NOT_SOURCE: u64 = 1 << 21;
+/// `PK_TRANSACTION_FLAG_ENUM_SIMULATE`: report what would happen, change nothing.
+const FLAG_SIMULATE: u64 = 1 << 2;
 /// `PK_TRANSACTION_FLAG_ENUM_ONLY_TRUSTED`: never install unsigned packages.
 const FLAG_ONLY_TRUSTED: u64 = 1 << 1;
 const INFO_SECURITY: u32 = 8;
@@ -36,6 +43,7 @@ pub struct Pkg {
 #[derive(Debug, Default)]
 struct Outcome {
     packages: Vec<Pkg>,
+    details: Vec<HashMap<String, zbus::zvariant::OwnedValue>>,
     errors: Vec<String>,
     exit: u32,
     restart_system: Vec<String>,
@@ -136,6 +144,14 @@ where
                             progress(tx, info, &id, &mut seen);
                             out.packages.push(Pkg { info, id, summary });
                         }
+                    }
+                }
+                "Details" => {
+                    if let Ok(d) = msg
+                        .body()
+                        .deserialize::<HashMap<String, zbus::zvariant::OwnedValue>>()
+                    {
+                        out.details.push(d);
                     }
                 }
                 "ErrorCode" => {
@@ -315,6 +331,213 @@ pub async fn upgrade(ids: &[String], tx: &Tx) -> Result<(Vec<String>, Vec<String
             r.errors.join("; ")
         })
     }
+}
+
+// ----- packages (M4b) -----
+
+fn entry(p: &Pkg) -> PackageEntry {
+    let (name, version, arch, data) = split_id(&p.id);
+    PackageEntry {
+        backend: "packagekit".into(),
+        name: name.to_string(),
+        version: version.to_string(),
+        arch: Some(arch.to_string()).filter(|a| !a.is_empty()),
+        // Installed packages have `installed` or `manual:<repo>` / `auto:<repo>` as their data.
+        repo: Some(data.rsplit(':').next().unwrap_or(data).to_string())
+            .filter(|d| !d.is_empty() && d != "installed"),
+        installed: p.info & 0xffff == 1,
+        summary: p.summary.clone(),
+    }
+}
+
+pub async fn search(terms: &[String]) -> Result<Vec<PackageEntry>, String> {
+    let conn = connect().await?;
+    let r = transaction(
+        &conn,
+        "SearchNames",
+        &(FILTER_NEWEST | FILTER_ARCH | FILTER_NOT_SOURCE, terms.to_vec()),
+        None,
+        Duration::from_secs(120),
+    )
+    .await?;
+    if r.exit != EXIT_SUCCESS {
+        return Err(format!("search failed: {}", r.errors.join("; ")));
+    }
+    Ok(merge_installed(r.packages.iter().map(entry).collect()))
+}
+
+/// One row per name and arch: an installed package and its newer available version become one
+/// row, marked installed, with the newest version.
+fn merge_installed(list: Vec<PackageEntry>) -> Vec<PackageEntry> {
+    let mut out: Vec<PackageEntry> = Vec::new();
+    for e in list {
+        if let Some(prev) = out.iter_mut().find(|p| p.name == e.name && p.arch == e.arch) {
+            prev.installed |= e.installed;
+            if super::reboot::version_cmp(&e.version, &prev.version).is_gt() {
+                prev.version = e.version;
+                if e.repo.is_some() {
+                    prev.repo = e.repo;
+                }
+            }
+        } else {
+            out.push(e);
+        }
+    }
+    out
+}
+
+fn detail_str(d: &HashMap<String, zbus::zvariant::OwnedValue>, key: &str) -> Option<String> {
+    d.get(key)
+        .and_then(|v| String::try_from(v.clone()).ok())
+        .filter(|s| !s.is_empty() && s != "unknown")
+}
+
+pub async fn info(name: &str) -> Result<PackageDetail, String> {
+    let conn = connect().await?;
+    let names = vec![name.to_string()];
+    let r = transaction(
+        &conn,
+        "Resolve",
+        &(FILTER_NEWEST | FILTER_ARCH | FILTER_NOT_SOURCE, names.clone()),
+        None,
+        Duration::from_secs(120),
+    )
+    .await?;
+    let found = merge_installed(r.packages.iter().map(entry).collect());
+    let Some(first) = found.into_iter().next() else {
+        return Err(format!("no package called '{name}'"));
+    };
+    let installed = transaction(
+        &conn,
+        "Resolve",
+        &(FILTER_INSTALLED, names),
+        None,
+        Duration::from_secs(60),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.packages.first().map(|p| split_id(&p.id).1.to_string()));
+    // Details of the newest version.
+    let id = r
+        .packages
+        .iter()
+        .map(|p| p.id.clone())
+        .find(|id| split_id(id).0 == first.name && split_id(id).1 == first.version)
+        .unwrap_or_default();
+    let d = transaction(&conn, "GetDetails", &(vec![id],), None, Duration::from_secs(60))
+        .await
+        .ok()
+        .and_then(|r| r.details.into_iter().next())
+        .unwrap_or_default();
+    let size = d
+        .get("size")
+        .and_then(|v| u64::try_from(v.clone()).ok())
+        .filter(|s| *s > 0);
+    Ok(PackageDetail {
+        installed_version: installed,
+        description: detail_str(&d, "description").unwrap_or_else(|| first.summary.clone()),
+        url: detail_str(&d, "url"),
+        license: detail_str(&d, "license"),
+        size_bytes: size,
+        entry: PackageEntry {
+            installed: first.installed,
+            ..first
+        },
+    })
+}
+
+/// Installs or removes packages; with `simulate`, only reports what would happen.
+pub async fn change(
+    action: PackageAction,
+    names: &[String],
+    simulate: bool,
+    tx: &Tx,
+) -> Result<PackagePlan, String> {
+    let conn = connect().await?;
+    let mut plan = PackagePlan {
+        action: action.as_str().into(),
+        backend: "packagekit".into(),
+        names: names.to_vec(),
+        ..Default::default()
+    };
+    let filter = match action {
+        PackageAction::Install => FILTER_NOT_INSTALLED | FILTER_NEWEST | FILTER_ARCH | FILTER_NOT_SOURCE,
+        PackageAction::Remove => FILTER_INSTALLED,
+    };
+    let r = transaction(
+        &conn,
+        "Resolve",
+        &(filter, names.to_vec()),
+        None,
+        Duration::from_secs(120),
+    )
+    .await?;
+    let mut ids = Vec::new();
+    for n in names {
+        match r.packages.iter().find(|p| split_id(&p.id).0 == n.as_str()) {
+            Some(p) => ids.push(p.id.clone()),
+            None => plan.errors.push(match action {
+                PackageAction::Install => format!("'{n}' isn't available, or it's already installed"),
+                PackageAction::Remove => format!("'{n}' isn't installed"),
+            }),
+        }
+    }
+    if !plan.errors.is_empty() || ids.is_empty() {
+        return Ok(plan);
+    }
+    let flags = FLAG_ONLY_TRUSTED | if simulate { FLAG_SIMULATE } else { 0 };
+    let progress = if simulate { None } else { Some(tx) };
+    let (r, method) = match action {
+        PackageAction::Install => (
+            transaction(
+                &conn,
+                "InstallPackages",
+                &(flags, ids),
+                progress,
+                Duration::from_secs(3600),
+            )
+            .await?,
+            "install",
+        ),
+        // allow_deps: packages that need the removed ones go too; the plan lists them all and
+        // the person confirms that list. autoremove: no (leftover dependencies stay).
+        PackageAction::Remove => (
+            transaction(
+                &conn,
+                "RemovePackages",
+                &(flags, ids, true, false),
+                progress,
+                Duration::from_secs(3600),
+            )
+            .await?,
+            "remove",
+        ),
+    };
+    if r.exit != EXIT_SUCCESS {
+        plan.errors.push(if r.errors.is_empty() {
+            format!("PackageKit couldn't {method} (exit code {})", r.exit)
+        } else {
+            r.errors.join("; ")
+        });
+        return Ok(plan);
+    }
+    for p in &r.packages {
+        let e = entry(p);
+        let list = match p.info & 0xffff {
+            12 | 10 => &mut plan.install,
+            13 | 15 => &mut plan.remove,
+            11 | 19 | 20 => &mut plan.update,
+            _ => continue,
+        };
+        if !list.iter().any(|x| x.name == e.name && x.arch == e.arch) {
+            list.push(e);
+        }
+    }
+    for id in &r.restart_system {
+        let (name, version, ..) = split_id(id);
+        reboot::mark(&format!("{name} {version} was changed and needs a restart"));
+    }
+    Ok(plan)
 }
 
 #[cfg(test)]

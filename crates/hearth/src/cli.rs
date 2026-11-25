@@ -116,6 +116,9 @@ pub enum Command {
     /// System updates: the distro's packages and Flatpak apps. Hearth never reboots by itself.
     #[command(subcommand)]
     System(SystemCmd),
+    /// Packages: search, details, install, remove (the distro's packages, or Flatpak apps).
+    #[command(subcommand)]
+    Package(PackageCmd),
     /// Move apps from another manager to Hearth.
     #[command(subcommand)]
     Migrate(MigrateCmd),
@@ -153,6 +156,44 @@ pub enum SystemCmd {
         /// Only security updates (all of them, or only those among the given ids).
         #[arg(long)]
         security: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PackageCmd {
+    /// Search package names (the distro's packages and Flatpak apps).
+    Search {
+        terms: Vec<String>,
+        /// Only Flatpak apps.
+        #[arg(long)]
+        flatpak: bool,
+        /// Only the distro's packages.
+        #[arg(long, conflicts_with = "flatpak")]
+        native: bool,
+    },
+    /// Details of one package.
+    Info {
+        name: String,
+        /// A Flatpak app id instead of a distro package.
+        #[arg(long)]
+        flatpak: bool,
+    },
+    /// Install packages (needs a token with 'system:write'). Shows everything that would be
+    /// installed first.
+    Install {
+        names: Vec<String>,
+        #[arg(long)]
+        flatpak: bool,
+    },
+    /// Remove packages (needs 'system:write'). Shows everything that would be removed first;
+    /// removing what the server needs (SSH, Docker, the kernel…) is refused without
+    /// --allow-critical.
+    Remove {
+        names: Vec<String>,
+        #[arg(long)]
+        flatpak: bool,
+        #[arg(long)]
+        allow_critical: bool,
     },
 }
 

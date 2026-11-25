@@ -1,10 +1,12 @@
 //! `hearth system …`: system updates from the CLI.
 
 use crate::changes::{confirm, follow};
-use crate::cli::{GlobalArgs, SystemCmd};
+use crate::cli::{GlobalArgs, PackageCmd, SystemCmd};
 use crate::client::Client;
 use crate::render;
-use hearth_core::model::{JobRef, SystemInfo, SystemUpdate, SystemUpdates, UpgradePlan};
+use hearth_core::model::{
+    JobRef, PackageDetail, PackageEntry, PackagePlan, SystemInfo, SystemUpdate, SystemUpdates, UpgradePlan,
+};
 use hearth_core::output::Envelope;
 use hearth_core::{Error, ExitCode};
 use serde_json::{Value, json};
@@ -178,5 +180,179 @@ fn print_plan(p: &UpgradePlan) {
     }
     for n in &p.notes {
         println!("note: {n}");
+    }
+}
+
+// ----- packages (M4b) -----
+
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+pub async fn package(c: &Client, g: &GlobalArgs, cmd: &PackageCmd) -> Result<ExitCode, Error> {
+    match cmd {
+        PackageCmd::Search {
+            terms,
+            flatpak,
+            native,
+        } => {
+            if terms.is_empty() {
+                return Err(Error::Usage("give something to search for".into()));
+            }
+            let backend = if *flatpak {
+                "flatpak"
+            } else if *native {
+                "native"
+            } else {
+                "all"
+            };
+            let list: Vec<PackageEntry> = c
+                .get(&format!(
+                    "/v1/packages/search?q={}&backend={backend}",
+                    enc(&terms.join(" "))
+                ))
+                .await?;
+            if g.json {
+                print_json(&list);
+            } else if list.is_empty() {
+                println!("Nothing found.");
+            } else {
+                let mut rows = vec![vec![
+                    "NAME".to_string(),
+                    "VERSION".into(),
+                    "INSTALLED".into(),
+                    "FROM".into(),
+                    "SUMMARY".into(),
+                ]];
+                for e in &list {
+                    rows.push(vec![
+                        e.name.clone(),
+                        e.version.clone(),
+                        if e.installed { "yes".into() } else { String::new() },
+                        from(e),
+                        e.summary.chars().take(60).collect(),
+                    ]);
+                }
+                render::table(&rows);
+            }
+            Ok(ExitCode::Ok)
+        }
+        PackageCmd::Info { name, flatpak } => {
+            let backend = if *flatpak { "flatpak" } else { "native" };
+            let d: PackageDetail = c
+                .get(&format!("/v1/packages/info?name={}&backend={backend}", enc(name)))
+                .await?;
+            if g.json {
+                print_json(&d);
+            } else {
+                println!("{} {} ({})", d.entry.name, d.entry.version, from(&d.entry));
+                match &d.installed_version {
+                    Some(v) if *v == d.entry.version => println!("installed: yes"),
+                    Some(v) => println!("installed: {v} (newer available)"),
+                    None => println!("installed: no"),
+                }
+                if !d.description.is_empty() {
+                    println!("{}", d.description);
+                }
+                if let Some(u) = &d.url {
+                    println!("url: {u}");
+                }
+                if let Some(l) = &d.license {
+                    println!("license: {l}");
+                }
+                if let Some(s) = d.size_bytes {
+                    println!("size: {}", render::bytes(s));
+                }
+            }
+            Ok(ExitCode::Ok)
+        }
+        PackageCmd::Install { names, flatpak } => change(c, g, "install", names, *flatpak, false).await,
+        PackageCmd::Remove {
+            names,
+            flatpak,
+            allow_critical,
+        } => change(c, g, "remove", names, *flatpak, *allow_critical).await,
+    }
+}
+
+fn from(e: &PackageEntry) -> String {
+    match &e.repo {
+        Some(r) => format!("{} ({r})", e.backend),
+        None => e.backend.clone(),
+    }
+}
+
+async fn change(
+    c: &Client,
+    g: &GlobalArgs,
+    action: &str,
+    names: &[String],
+    flatpak: bool,
+    allow_critical: bool,
+) -> Result<ExitCode, Error> {
+    if names.is_empty() {
+        return Err(Error::Usage(format!("say which packages to {action}")));
+    }
+    let backend = if flatpak { "flatpak" } else { "native" };
+    let path = format!("/v1/packages/{action}");
+    let body = |dry_run: bool| json!({ "names": names, "backend": backend, "dry_run": dry_run, "allow_critical": allow_critical });
+    let plan: PackagePlan = c.post(&path, Some(body(true))).await?;
+    if !g.json || g.dry_run {
+        if g.json {
+            print_json(&plan);
+        } else {
+            print_package_plan(&plan);
+        }
+    }
+    if g.dry_run {
+        return Ok(ExitCode::Ok);
+    }
+    if !plan.errors.is_empty() {
+        return Err(Error::Usage(plan.errors.join("; ")));
+    }
+    let count = plan.install.len() + plan.remove.len() + plan.update.len();
+    if count == 0 && action == "install" {
+        if !g.json {
+            println!("Nothing to do.");
+        }
+        return Ok(ExitCode::Ok);
+    }
+    confirm(
+        g,
+        &format!(
+            "{} {}",
+            if action == "install" { "Install" } else { "Remove" },
+            names.join(" ")
+        ),
+    )?;
+    let r: JobRef = c.post(&path, Some(body(false))).await?;
+    follow(c, g, r).await
+}
+
+fn print_package_plan(p: &PackagePlan) {
+    let list = |title: &str, l: &[PackageEntry]| {
+        if !l.is_empty() {
+            println!("{title} ({}):", l.len());
+            for e in l {
+                println!("  {} {}", e.name, e.version);
+            }
+        }
+    };
+    list("Would install", &p.install);
+    list("Would upgrade", &p.update);
+    list("Would REMOVE", &p.remove);
+    for w in &p.warnings {
+        println!("warning: {w}");
+    }
+    for e in &p.errors {
+        println!("error: {e}");
     }
 }

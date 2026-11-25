@@ -413,3 +413,65 @@ pub struct UpgradeResult {
     pub errors: Vec<String>,
     pub reboot: RebootStatus,
 }
+
+// ----- M4b: packages -----
+
+/// A package (or Flatpak app) found by a search, or part of a plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageEntry {
+    /// `packagekit`, `pacman` or `flatpak`.
+    pub backend: String,
+    pub name: String,
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    /// Repository, or Flatpak remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub installed: bool,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageDetail {
+    #[serde(flatten)]
+    pub entry: PackageEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// Download or installed size, as the backend reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+}
+
+/// What installing or removing packages would do.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PackagePlan {
+    /// `install` or `remove`.
+    pub action: String,
+    pub backend: String,
+    /// What was asked for.
+    pub names: Vec<String>,
+    /// Everything that would be installed (dependencies included).
+    pub install: Vec<PackageEntry>,
+    /// Everything that would be removed (packages that depend on it included).
+    pub remove: Vec<PackageEntry>,
+    /// Packages that would be upgraded on the way.
+    pub update: Vec<PackageEntry>,
+    pub warnings: Vec<String>,
+    /// Problems that block the change.
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PackageResult {
+    pub action: String,
+    pub names: Vec<String>,
+    pub reboot: RebootStatus,
+}

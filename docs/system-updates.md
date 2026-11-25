@@ -1,4 +1,4 @@
-# System updates
+# System updates and packages
 
 Hearth lists and installs updates for the distro's packages and for Flatpak apps. **It never
 reboots by itself.** When an update needs a reboot (a new kernel, or the package manager asks for
@@ -61,3 +61,23 @@ sudo hearth settings security_updates off     # the default
 
 When set, Hearth refreshes the lists at that time and installs only the security updates (as job
 `system-upgrade`, actor `schedule`). Other updates wait for you. It still never reboots.
+
+## Packages
+
+```sh
+hearth package search <words>... [--flatpak|--native]
+hearth package info <name> [--flatpak]
+hearth package install <name>... [--flatpak] [--dry-run]
+hearth package remove <name>... [--flatpak] [--allow-critical] [--dry-run]
+```
+
+- Search and info need only `read`; install and remove need `system:write`.
+- Install and remove always show the full plan first: every package that would be installed
+  (dependencies too), upgraded, or **removed** (packages that depend on a removed one go with it).
+  PackageKit computes the plan with a simulated transaction; pacman with `--print`. Flatpak has
+  no dry run: the plan lists the apps, and the runtimes they need come along.
+- **Critical packages are guarded.** A removal that would take SSH, sudo, systemd, D-Bus, Docker,
+  Tailscale, networking, the package manager itself, a kernel or a boot loader with it is refused
+  unless you add `--allow-critical`.
+- On Arch, installs use the current package databases (no `-y`), so they never cause a partial
+  upgrade. If a package is gone from the mirrors, run `hearth system upgrade --all` first.

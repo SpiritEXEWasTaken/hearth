@@ -162,6 +162,17 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 }
             });
             let mode = a.probe_system.as_deref().unwrap_or("list");
+            if let Some(term) = mode.strip_prefix("search=") {
+                let r = sysupdate::package_search(&[term.to_string()], "all").await;
+                print_json(&Envelope::success(serde_json::json!({ "search": r })));
+                return Ok(ExitCode::Ok);
+            }
+            if let Some(name) = mode.strip_prefix("info=") {
+                let backend = if name.contains('.') { "flatpak" } else { "native" };
+                let r = sysupdate::package_info(name, backend).await;
+                print_json(&Envelope::success(serde_json::json!({ "info": r })));
+                return Ok(ExitCode::Ok);
+            }
             let info = sysupdate::info().await;
             let upgrade = match mode {
                 "upgrade-security" => Some(sysupdate::upgrade(&[], true, &tx).await),
