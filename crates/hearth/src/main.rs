@@ -9,6 +9,8 @@ mod fixes;
 mod helper;
 mod helper_apps;
 mod render;
+mod system_cli;
+mod sysupdate;
 mod unixhttp;
 mod users;
 
@@ -151,6 +153,27 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 ..Default::default()
             };
             daemon::run(cfg).await.map_err(Error::Other)?;
+        }
+        Command::Helper(a) if a.probe_system.is_some() => {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let printer = tokio::spawn(async move {
+                while let Some(l) = rx.recv().await {
+                    eprintln!("{l}");
+                }
+            });
+            let mode = a.probe_system.as_deref().unwrap_or("list");
+            let info = sysupdate::info().await;
+            let upgrade = match mode {
+                "upgrade-security" => Some(sysupdate::upgrade(&[], true, &tx).await),
+                "upgrade-all" => Some(sysupdate::upgrade(&[], false, &tx).await),
+                _ => None,
+            };
+            let updates = sysupdate::updates(mode == "refresh", &tx).await;
+            drop(tx);
+            let _ = printer.await;
+            print_json(&Envelope::success(
+                serde_json::json!({ "info": info, "upgrade": upgrade, "updates": updates }),
+            ));
         }
         Command::Helper(a) => {
             init_logging();

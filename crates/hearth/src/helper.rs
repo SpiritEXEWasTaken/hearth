@@ -6,7 +6,7 @@
 //! `/var/lib/hearth/apps`); everything else is read-only. Connections are accepted only from root and from the
 //! Hearth daemon's user, checked with the kernel's peer credentials (SO_PEERCRED).
 
-use crate::{helper_apps, unixhttp};
+use crate::{helper_apps, sysupdate, unixhttp};
 use hearth_core::model::DockerEndpoint;
 use hearth_core::proto::{self, LogRecord, Logs, Request, Response};
 use serde_json::Value;
@@ -146,6 +146,28 @@ impl Out<'_> {
     }
 }
 
+/// Runs `work`, forwarding the lines it sends to the daemon as progress while it runs.
+async fn with_progress<F, Fut, T>(out: &mut Out<'_>, work: F) -> T
+where
+    F: FnOnce(sysupdate::Tx) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let fut = work(tx);
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            r = &mut fut => {
+                while let Ok(line) = rx.try_recv() {
+                    out.progress(&line).await;
+                }
+                return r;
+            }
+            Some(line) = rx.recv() => out.progress(&line).await,
+        }
+    }
+}
+
 /// Changes are logged at info level (they end up in the journal as an audit trail).
 fn log_request(req: &Request, uid: u32) {
     match req {
@@ -173,6 +195,10 @@ fn log_request(req: &Request, uid: u32) {
         Request::BackupCasaos => tracing::info!(uid, "back up CasaOS"),
         Request::DumpPostgres { app, service } => tracing::info!(uid, app, service, "dump postgres"),
         Request::CasaosApply { app } => tracing::info!(uid, app, "hand back to CasaOS"),
+        Request::SystemUpgrade { ids, security_only } => {
+            tracing::info!(uid, ?ids, security_only, "system upgrade")
+        }
+        Request::SystemUpdates { refresh: true } => tracing::info!(uid, "refresh package lists"),
         other => tracing::debug!(?other, uid, "helper request"),
     }
 }
@@ -242,6 +268,16 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         Request::BackupCasaos => helper_apps::backup_casaos(cfg, out).await,
         Request::DumpPostgres { app, service } => helper_apps::dump_postgres(cfg, &app, &service, out).await,
         Request::CasaosApply { app } => helper_apps::casaos_apply(cfg, &app, out).await,
+        Request::SystemInfo => Ok(serde_json::to_value(sysupdate::info().await).unwrap_or(Value::Null)),
+        Request::SystemUpdates { refresh } => {
+            let r = with_progress(out, |tx| async move { sysupdate::updates(refresh, &tx).await }).await;
+            Ok(serde_json::to_value(r).unwrap_or(Value::Null))
+        }
+        Request::SystemUpgrade { ids, security_only } => with_progress(out, |tx| async move {
+            sysupdate::upgrade(&ids, security_only, &tx).await
+        })
+        .await
+        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
     };
     match result {
         Ok(data) => Response::Ok { data },

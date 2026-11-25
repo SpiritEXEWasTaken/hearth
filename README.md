@@ -4,11 +4,13 @@ A lightweight home-server manager: Docker Compose apps, a curated app store, OS 
 files, storage, users and a web terminal. It's one static Rust binary, has a web UI and an Android app, and
 uses under 30 MB of RAM when idle.
 
-> **Status: early development (milestone M3: CasaOS migration).** Hearth shows every app (CasaOS,
+> **Status: early development (milestone M4: system updates).** Hearth shows every app (CasaOS,
 > compose, rootless Docker) with state, health, memory and versions, and manages its own apps
 > (install, start/stop that persists, apply, update, revert, backup/restore) with health checks and
 > automatic rollback. CasaOS apps can be adopted in place, without restarting them; see
-> [docs/migration-casaos.md](docs/migration-casaos.md).
+> [docs/migration-casaos.md](docs/migration-casaos.md). System updates work through PackageKit
+> (Debian/Ubuntu, Fedora, openSUSE), pacman (Arch/CachyOS) and Flatpak, and Hearth never reboots by
+> itself; see [docs/system-updates.md](docs/system-updates.md).
 
 ## Goals
 
@@ -58,7 +60,7 @@ uses under 30 MB of RAM when idle.
 
 | Process | Runs as | Does |
 |---|---|---|
-| `hearth helper` | root | Only a fixed list of typed operations: reading Docker and CasaOS files, running `docker compose` with fixed command lines for Hearth apps, writing app files (with history), tagging and removing images, backups. Accepts connections only from root and the `hearth` user. |
+| `hearth helper` | root | Only a fixed list of typed operations: reading Docker and CasaOS files, running `docker compose` with fixed command lines for Hearth apps, writing app files (with history), tagging and removing images, backups, and system updates (PackageKit over D-Bus; pacman and Flatpak as transient systemd units). Accepts connections only from root and the `hearth` user. |
 | `hearth daemon` | `hearth` | The API on `/run/hearth/hearth.sock` (group `hearth`), registry checks, stats, SQLite state |
 | `hearth <command>` | you | The CLI. Members of the `hearth` group can read without sudo. Changes need a scoped token. |
 

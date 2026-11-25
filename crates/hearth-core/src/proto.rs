@@ -147,6 +147,21 @@ pub enum Request {
     CasaosApply {
         app: String,
     },
+
+    // ----- M4: system updates (package manager, Flatpak) -----
+    /// Distro, package backends and whether a reboot is needed.
+    SystemInfo,
+    /// Available updates from every backend. With `refresh`, the package lists are downloaded
+    /// first (apt update / dnf makecache / Flatpak summaries); this can take a minute.
+    SystemUpdates {
+        refresh: bool,
+    },
+    /// Installs updates. `ids` are `SystemUpdate::id`s from the current list; empty means all
+    /// (or all security updates with `security_only`). Streams progress lines.
+    SystemUpgrade {
+        ids: Vec<String>,
+        security_only: bool,
+    },
 }
 
 /// What `docker compose` should do. Each maps to one fixed command line in the helper.

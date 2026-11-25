@@ -4,6 +4,7 @@
 use crate::cli::{AppCmd, CasaosCmd, Command, GlobalArgs, ImagesCmd, JobCmd, MigrateCmd};
 use crate::client::Client;
 use crate::render;
+use crate::system_cli;
 use hearth_core::model::{ApplyPlan, HistoryEntry, ImageEntry, Job, JobRef, JobStatus, UpdatePlan};
 use hearth_core::output::Envelope;
 use hearth_core::proto::BackupInfo;
@@ -41,7 +42,7 @@ fn read_file(path: &std::path::Path) -> Result<String, Error> {
 }
 
 /// Asks "Continue? [y/N]" on a terminal. Without a terminal, `--yes` is required (exit 4).
-fn confirm(g: &GlobalArgs, what: &str) -> Result<(), Error> {
+pub fn confirm(g: &GlobalArgs, what: &str) -> Result<(), Error> {
     if g.yes {
         return Ok(());
     }
@@ -434,6 +435,7 @@ pub async fn run(cmd: &Command, g: &GlobalArgs) -> Option<Result<ExitCode, Error
         }
         Command::App(cmd) => return app(&c, g, cmd).await,
         Command::Migrate(MigrateCmd::Casaos { action }) => migrate(&c, g, action.as_ref()).await,
+        Command::System(cmd) => system_cli::run(&c, g, cmd).await,
         _ => return None,
     })
 }

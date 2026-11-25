@@ -93,6 +93,11 @@ pub const SETTINGS: &[(&str, &str, &str)] = &[
         "300",
         "seconds an app may take to become healthy after a change",
     ),
+    (
+        "security_updates",
+        "off",
+        "install security updates every day at HH:MM (local time), or off; Hearth never reboots",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,7 +382,11 @@ impl Db {
                 SETTINGS.iter().map(|(k, _, _)| *k).collect::<Vec<_>>().join(", ")
             ));
         }
-        if value.parse::<u64>().is_err() {
+        if key == "security_updates" {
+            if !super::system::valid_schedule(value) {
+                return Err("security_updates must be 'off' or a time like 04:17".into());
+            }
+        } else if value.parse::<u64>().is_err() {
             return Err(format!("{key} must be a whole number"));
         }
         self.conn

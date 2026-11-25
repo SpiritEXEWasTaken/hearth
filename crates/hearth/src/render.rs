@@ -34,6 +34,15 @@ fn short_digest(d: &str) -> String {
 }
 
 /// Prints rows as aligned columns; the first row is the header.
+/// "5 min ago" for a Unix time.
+pub fn ago(t: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    format!("{} ago", duration(now.saturating_sub(t).max(0) as u64))
+}
+
 pub fn table(rows: &[Vec<String>]) {
     let cols = rows.iter().map(Vec::len).max().unwrap_or(0);
     let widths: Vec<usize> = (0..cols)

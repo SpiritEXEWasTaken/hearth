@@ -58,6 +58,7 @@ pub fn router(state: State) -> Router {
         .route("/v1/tokens", get(list_tokens).post(create_token))
         .route("/v1/tokens/{id}", delete(revoke_token))
         .merge(super::api_changes::routes())
+        .merge(super::system::routes())
         .with_state(state)
 }
 

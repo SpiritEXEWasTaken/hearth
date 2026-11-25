@@ -327,3 +327,89 @@ pub struct ImageEntry {
     /// A Hearth rollback image (`hearth-rollback/...`).
     pub rollback: bool,
 }
+
+// ----- M4: system updates -----
+
+/// A package backend Hearth found on this host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendInfo {
+    /// `packagekit`, `pacman` or `flatpak`.
+    pub kind: String,
+    /// Whether it answers right now.
+    pub available: bool,
+    /// E.g. PackageKit's own backend (`apt`, `dnf5`, `zypp`), or the tool's version.
+    pub detail: String,
+    /// Why it isn't available, or a hint (e.g. "install packagekit").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RebootStatus {
+    pub needed: bool,
+    /// Why, in words (e.g. "kernel 6.12.118 is installed, 6.12.116 is running").
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemInfo {
+    /// `ID` from /etc/os-release (`debian`, `fedora`, `opensuse-tumbleweed`, `cachyos`…).
+    pub distro_id: String,
+    /// `PRETTY_NAME` from /etc/os-release.
+    pub distro_name: String,
+    pub kernel: String,
+    pub backends: Vec<BackendInfo>,
+    pub reboot: RebootStatus,
+}
+
+/// One available update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemUpdate {
+    /// `<backend>:<native id>`: what `hearth system upgrade <id>` takes.
+    pub id: String,
+    pub backend: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<String>,
+    pub new_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// From the distro's security channel (Debian/Ubuntu `-security`, Fedora/openSUSE advisories).
+    /// Arch and Flatpak have no such channel, so this is always false there.
+    pub security: bool,
+    /// `low`, `normal`, `important`, `critical`, `security`, `bugfix`, `enhancement` or `unknown`.
+    pub severity: String,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SystemUpdates {
+    /// Unix time of this list; 0 = never checked.
+    pub checked_at: i64,
+    pub updates: Vec<SystemUpdate>,
+    /// Backends that failed to answer, with the reason. The rest of the list is still valid.
+    pub errors: Vec<String>,
+    pub reboot: RebootStatus,
+}
+
+/// What `hearth system upgrade` would install.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpgradePlan {
+    pub updates: Vec<SystemUpdate>,
+    /// E.g. "Arch installs all updates together (partial upgrades aren't supported)".
+    pub notes: Vec<String>,
+    /// When the list was made (`hearth system updates --check` refreshes it).
+    pub checked_at: i64,
+}
+
+/// What an upgrade did, per backend.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpgradeResult {
+    pub installed: Vec<String>,
+    pub failed: Vec<String>,
+    pub errors: Vec<String>,
+    pub reboot: RebootStatus,
+}

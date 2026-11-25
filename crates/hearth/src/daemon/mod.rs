@@ -11,6 +11,7 @@ mod helper_client;
 mod jobs;
 mod migrate;
 pub mod stats;
+mod system;
 mod versions;
 
 use db::Db;
@@ -58,6 +59,7 @@ pub struct State {
     check_lock: Arc<tokio::sync::Mutex<()>>,
     jobs: Arc<jobs::Jobs>,
     host: Arc<HostDefaults>,
+    system: Arc<system::SystemState>,
 }
 
 /// Values filled into compose files that expect a manager to provide them.
@@ -112,6 +114,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
             pgid: cfg.pgid,
             tz: host_timezone(),
         }),
+        system: Arc::new(system::SystemState::load(&cfg.state_dir)),
     };
 
     if let Some(dir) = cfg.socket.parent() {
@@ -141,6 +144,8 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         cfg.first_check_delay,
         cfg.check_interval,
     ));
+
+    tokio::spawn(system::scheduler(state.clone()));
 
     tracing::info!(socket = %cfg.socket.display(), "daemon listening");
     let app = api::router(state).into_make_service_with_connect_info::<auth::Peer>();

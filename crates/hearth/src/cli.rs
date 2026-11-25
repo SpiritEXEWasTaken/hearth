@@ -23,7 +23,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct GlobalArgs {
     /// Print one machine-readable JSON document to stdout.
     #[arg(long, global = true, env = "HEARTH_JSON")]
@@ -113,6 +113,9 @@ pub enum Command {
         #[arg(num_args = 0..=2)]
         set: Vec<String>,
     },
+    /// System updates: the distro's packages and Flatpak apps. Hearth never reboots by itself.
+    #[command(subcommand)]
+    System(SystemCmd),
     /// Move apps from another manager to Hearth.
     #[command(subcommand)]
     Migrate(MigrateCmd),
@@ -125,6 +128,32 @@ pub enum Command {
     /// Run the privileged helper (used by the systemd unit).
     #[command(hide = true)]
     Helper(HelperArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SystemCmd {
+    /// Distro, package backends, and whether a reboot is needed (and why).
+    Info,
+    /// Available updates (from the last check). Exit code 10 when there are any.
+    Updates {
+        /// Refresh the package lists first (apt update / dnf makecache / Flatpak); takes a while.
+        #[arg(long)]
+        check: bool,
+        /// Only security updates.
+        #[arg(long)]
+        security: bool,
+    },
+    /// Install updates (needs a token with 'system:write'). Never reboots.
+    Upgrade {
+        /// Update ids or package names from `hearth system updates`.
+        ids: Vec<String>,
+        /// Every available update.
+        #[arg(long, conflicts_with = "ids")]
+        all: bool,
+        /// Only security updates (all of them, or only those among the given ids).
+        #[arg(long)]
+        security: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -292,6 +321,11 @@ pub struct HelperArgs {
     pub casaos_apps_dir: PathBuf,
     #[arg(long, default_value = "/usr/bin/docker")]
     pub docker_bin: PathBuf,
+    /// Testing aid: print this host's system info and update list as JSON, then exit.
+    /// `refresh` also downloads the package lists; `upgrade-security` / `upgrade-all` install
+    /// updates first (all need root).
+    #[arg(long, hide = true, value_name = "list|refresh|upgrade-security|upgrade-all")]
+    pub probe_system: Option<String>,
 }
 
 #[cfg(test)]

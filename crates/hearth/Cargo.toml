@@ -37,6 +37,9 @@ hex.workspace = true
 getrandom.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+zbus.workspace = true
+futures-util.workspace = true
+jiff.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

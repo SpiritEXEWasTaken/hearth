@@ -88,6 +88,26 @@ Rules for changes:
 - Read-only apps (CasaOS apps before migration, rootless apps) refuse changes with exit code 5
   and `error.kind = "read_only"`. That's expected; don't work around it.
 
+## System updates
+
+System updates (the distro's packages and Flatpak; see `docs/system-updates.md`). Reading is always
+safe; installing needs a token with `system:write`, which the person grants only if they want that:
+
+```sh
+hearth system info --json                 # distro, backends, "reboot.needed" and its reasons
+hearth system updates --json [--check] [--security]   # exit 10 when there are updates
+hearth system upgrade <id|name>... [--security] --dry-run --json   # the plan, then the same with --yes
+```
+
+Rules for system updates:
+
+- **Never install system updates without the person's OK**, even security ones, and never
+  `--all` on your own. Report what `hearth system updates` shows instead.
+- **Hearth never reboots, and neither should you.** When `reboot.needed` is true, tell the person
+  and the reasons; rebooting some servers needs someone present.
+- A kernel update means a reboot will be needed; say so before installing.
+- On Arch, choosing one pacman update installs all of them: show the person the plan's notes.
+
 ## Migrating from CasaOS
 
 `hearth migrate casaos --json` is read-only. `backup`, `adopt <app> [--fix ID]` and `undo <app>`
