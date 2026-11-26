@@ -401,6 +401,14 @@ pub fn version_from_labels(labels: &BTreeMap<String, String>) -> Option<String> 
         "org.label-schema.version",
         "version",
     ] {
+        // Images built on Ubuntu/Debian/Alpine often keep the base image's labels
+        // (`ref.name=ubuntu`, `version=24.04`): that's the OS, not the app.
+        let base_os = labels
+            .get("org.opencontainers.image.ref.name")
+            .is_some_and(|n| ["ubuntu", "debian", "alpine", "fedora"].contains(&n.trim()));
+        if key == "org.opencontainers.image.version" && base_os {
+            continue;
+        }
         if let Some(v) = labels.get(key) {
             let v = v.trim();
             if !v.is_empty() && v != "latest" {
@@ -464,5 +472,27 @@ mod tests {
             "latest".to_string(),
         );
         assert_eq!(version_from_labels(&l), None);
+    }
+}
+
+#[cfg(test)]
+mod base_os_label_tests {
+    use super::version_from_labels;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn base_os_version_is_not_the_app_version() {
+        let mut l = BTreeMap::new();
+        l.insert(
+            "org.opencontainers.image.ref.name".to_string(),
+            "ubuntu".to_string(),
+        );
+        l.insert(
+            "org.opencontainers.image.version".to_string(),
+            "24.04".to_string(),
+        );
+        assert_eq!(version_from_labels(&l), None);
+        l.insert("org.label-schema.version".to_string(), "0.13.1".to_string());
+        assert_eq!(version_from_labels(&l).as_deref(), Some("0.13.1"));
     }
 }
