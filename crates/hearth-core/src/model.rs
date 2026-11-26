@@ -173,8 +173,13 @@ pub struct LatestInfo {
     pub digest: Option<String>,
     /// Human-readable version of `digest`, from its image labels.
     pub version: Option<String>,
-    /// True when the tag now points to a different image than the one running.
+    /// True when the tag now points to a different image than the one running (never for
+    /// references pinned to a digest: updating them changes nothing).
     pub update_available: bool,
+    /// The reference pins an exact build (`image:tag@sha256:…`); a newer build of the tag may
+    /// exist (`digest` differs), but only changing the file moves to it.
+    #[serde(default)]
+    pub pinned: bool,
     /// A newer tag on the same track (e.g. `v3.4.2` when running `v3.4.1`). Never applied automatically.
     pub newer_in_track: Option<String>,
     /// A newer major version tag (e.g. `v4` when running `v3`). Informational only.

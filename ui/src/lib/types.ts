@@ -60,6 +60,7 @@ export interface Latest {
 	digest: string | null;
 	version: string | null;
 	update_available: boolean;
+	pinned?: boolean;
 	newer_in_track: string | null;
 	newer_major: string | null;
 	error: string | null;

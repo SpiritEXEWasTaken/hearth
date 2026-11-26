@@ -140,6 +140,7 @@ fn latest_str(i: &ImageVersion) -> String {
     match &i.latest {
         None => "not checked".into(),
         Some(l) if l.error.is_some() && l.digest.is_none() => "check failed".into(),
+        Some(l) if l.pinned => "pinned build".into(),
         Some(l) if !l.update_available => "up to date".into(),
         Some(l) => l
             .version

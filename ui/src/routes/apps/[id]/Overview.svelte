@@ -103,10 +103,24 @@
 											<span class="muted">not checked</span>
 										{:else if img.latest.error}
 											<span class="muted" title={img.latest.error}>couldn't check</span>
+										{:else if img.latest.pinned}
+											<span
+												class="badge"
+												title="The app's setup file names this exact build, so updates don't change it. The app's own updates move the pin."
+												>pinned build</span
+											>
 										{:else if img.latest.update_available}
 											<span class="badge accent">{img.latest.version ?? 'newer build'}</span>
 										{:else}
 											<span class="badge ok">up to date</span>
+										{/if}
+										{#if img.latest?.update_available && app.read_only}
+											<div class="muted small">
+												Hearth only watches this app, so it can't update it. Update it where it runs{app.working_dir
+													? ':'
+													: '.'}
+												{#if app.working_dir}<code>cd {app.working_dir} && docker compose pull && docker compose up -d</code>{/if}
+											</div>
 										{/if}
 										{#if img.latest?.newer_major}
 											<div class="muted small">New major version: {img.latest.newer_major}</div>

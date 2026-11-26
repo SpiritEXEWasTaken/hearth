@@ -189,13 +189,14 @@ pub fn check_key(reference: &str) -> Option<String> {
     Some(r.with_tag(&r.tag).to_string())
 }
 
-pub fn latest_info(check: &ImageCheck, running_digest: Option<&str>) -> LatestInfo {
+pub fn latest_info(check: &ImageCheck, running_digest: Option<&str>, pinned: bool) -> LatestInfo {
     LatestInfo {
+        pinned,
         checked_at: check.checked_at,
         digest: check.digest.clone(),
         version: check.version.clone(),
         update_available: match (check.digest.as_deref(), running_digest) {
-            (Some(remote), Some(running)) => remote != running,
+            (Some(remote), Some(running)) => !pinned && remote != running,
             _ => false,
         },
         newer_in_track: check.newer_in_track.clone(),
@@ -337,7 +338,7 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
         let running_version = hearth_registry::client::version_from_labels(&labels);
         let latest = check_key(&reference)
             .and_then(|k| state.with_db(|db| db.image_check(&k).ok().flatten()))
-            .map(|chk| latest_info(&chk, running_digest.as_deref()));
+            .map(|chk| latest_info(&chk, running_digest.as_deref(), reference.contains('@')));
         images.push(ImageVersion {
             service: service_name,
             reference,
@@ -570,10 +571,12 @@ mod tests {
             digest: Some("sha256:new".into()),
             ..Default::default()
         };
-        assert!(latest_info(&chk, Some("sha256:old")).update_available);
-        assert!(!latest_info(&chk, Some("sha256:new")).update_available);
+        assert!(latest_info(&chk, Some("sha256:old"), false).update_available);
+        assert!(!latest_info(&chk, Some("sha256:new"), false).update_available);
+        // A digest-pinned reference never shows an update: pulling it gives the same build.
+        assert!(!latest_info(&chk, Some("sha256:old"), true).update_available);
         assert!(
-            !latest_info(&chk, None).update_available,
+            !latest_info(&chk, None, false).update_available,
             "unknown running digest is not an update"
         );
     }
