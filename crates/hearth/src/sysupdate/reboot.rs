@@ -13,18 +13,8 @@ pub fn status() -> RebootStatus {
     let running = std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let modules = ["/usr/lib/modules", "/lib/modules"]
-        .into_iter()
-        .map(Path::new)
-        .find(|p| p.is_dir());
-    if let (Some(dir), false) = (modules, running.is_empty()) {
-        let installed: Vec<String> = std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.path().join("modules.dep").is_file())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
+    if !running.is_empty() {
+        let installed = installed_kernels();
         if let Some(r) = kernel_reason(&running, &installed) {
             reasons.push(r);
         }
@@ -49,6 +39,30 @@ pub fn status() -> RebootStatus {
         needed: !reasons.is_empty(),
         reasons,
     }
+}
+
+/// Installed kernel versions: module folders with a `modules.dep`, plus `/boot/vmlinuz-<version>`
+/// (the module folders can be hidden by a sandbox; Arch's /boot names carry no version).
+fn installed_kernels() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for dir in ["/usr/lib/modules", "/lib/modules"] {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.path().join("modules.dep").is_file() {
+                out.push(e.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    for e in std::fs::read_dir("/boot").into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if let Some(v) = name.strip_prefix("vmlinuz-")
+            && v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        {
+            out.push(v.to_string());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Records that an update asked for a restart (shown until the next boot).

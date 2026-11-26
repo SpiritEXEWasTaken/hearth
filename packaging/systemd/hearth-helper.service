@@ -21,7 +21,8 @@ ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
-ProtectKernelModules=yes
+# No ProtectKernelModules: it hides /usr/lib/modules, which the reboot check reads. Loading
+# modules is impossible anyway (no CAP_SYS_MODULE below).
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
