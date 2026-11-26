@@ -35,7 +35,9 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
+# Only to listen on port 443 (and 80 later) for the web UI; nothing else.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 # Hard ceiling; normal idle use is far below this.
 MemoryMax=128M
 

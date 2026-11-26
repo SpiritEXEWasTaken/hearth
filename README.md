@@ -4,7 +4,7 @@ A lightweight home-server manager: Docker Compose apps, a curated app store, OS 
 files, storage, users and a web terminal. It's one static Rust binary, has a web UI and an Android app, and
 uses under 30 MB of RAM when idle.
 
-> **Status: early development (milestone M4 done: system updates, packages, app kinds).** Hearth shows every app (CasaOS,
+> **Status: early development (M5a done: web UI over HTTPS with sign-in, dashboard and app pages).** Hearth shows every app (CasaOS,
 > compose, rootless Docker) with state, health, memory and versions, and manages its own apps
 > (install, start/stop that persists, apply, update, revert, backup/restore) with health checks and
 > automatic rollback. CasaOS apps can be adopted in place, without restarting them; see
@@ -13,7 +13,8 @@ uses under 30 MB of RAM when idle.
 > installed and removed (with a full plan first), and Hearth never reboots by itself; see
 > [docs/system-updates.md](docs/system-updates.md). Besides compose apps, systemd services, programs
 > Hearth runs, links and packages can be apps; only those with a web page go on the main app list
-> ([docs/app-kinds.md](docs/app-kinds.md)).
+> ([docs/app-kinds.md](docs/app-kinds.md)). The web UI runs on port 443 with a real Tailscale certificate
+> or Hearth's own one, with an admin account created on first run ([docs/web-ui.md](docs/web-ui.md)).
 
 ## Goals
 
@@ -42,7 +43,8 @@ uses under 30 MB of RAM when idle.
 | `packaging/` | systemd units, `install.sh`, the Claude Code skill |
 | `docs/agent-guide.md` | How AI agents and scripts should use the CLI safely |
 | `ci/smoke.sh` | End-to-end test against a real Docker, with the idle-memory budget |
-| `ui/` | SvelteKit web UI, compiled to static files embedded in the binary (later milestone) |
+| `ui/` | SvelteKit web UI, compiled to static files embedded in the binary; Playwright tests in `ui/tests` |
+| `ci/e2e.sh` | Runs the web UI tests against a throwaway Hearth |
 | `android/` | Kotlin + Jetpack Compose app (later milestone) |
 
 ## CLI exit codes
@@ -64,10 +66,10 @@ uses under 30 MB of RAM when idle.
 | Process | Runs as | Does |
 |---|---|---|
 | `hearth helper` | root | Only a fixed list of typed operations: reading Docker and CasaOS files, running `docker compose` with fixed command lines for Hearth apps, writing app files (with history), tagging and removing images, backups, and system updates (PackageKit over D-Bus; pacman and Flatpak as transient systemd units). Accepts connections only from root and the `hearth` user. |
-| `hearth daemon` | `hearth` | The API on `/run/hearth/hearth.sock` (group `hearth`), registry checks, stats, SQLite state |
+| `hearth daemon` | `hearth` | The API on `/run/hearth/hearth.sock` (group `hearth`) and over HTTPS on port 443 (web UI, sign-in required), registry checks, stats, SQLite state. Its only extra right is binding ports below 1024. |
 | `hearth <command>` | you | The CLI. Members of the `hearth` group can read without sudo. Changes need a scoped token. |
 
-Idle memory for helper + daemon is about 10–15 MB, and CI fails above 30 MB.
+Idle memory for helper + daemon is about 18 MB with the web UI, and CI fails above 30 MB.
 
 ## Install (from a release binary)
 
@@ -76,9 +78,13 @@ sudo packaging/install.sh --binary ./hearth --add-user "$USER"
 hearth status
 ```
 
+Then open `https://<server>/` and create the admin account with the code `install.sh` prints
+(also `hearth web setup-code`).
+
 ## Building
 
 ```sh
+(cd ui && npm ci && npm run build)                                # web UI, embedded at compile time
 cargo test --workspace
 cargo build --release -p hearth                                   # native
 cargo zigbuild --release --target x86_64-unknown-linux-musl -p hearth   # static, as in CI (needs zig)

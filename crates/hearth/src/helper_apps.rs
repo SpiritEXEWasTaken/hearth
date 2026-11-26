@@ -299,7 +299,7 @@ fn compose_base(cfg: &HelperConfig, dir: &Path, app: &str, compose_file: &Path) 
             "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         )
-        .env("HOME", "/root")
+        .env("HOME", docker_home())
         .env("DOCKER_HOST", format!("unix://{}", cfg.docker_socket.display()))
         .stdin(Stdio::null())
         .kill_on_drop(true);
@@ -1347,7 +1347,7 @@ pub async fn casaos_apply(cfg: &HelperConfig, app: &str, out: &mut Out<'_>) -> R
             "PATH",
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         )
-        .env("HOME", "/root")
+        .env("HOME", docker_home())
         .stdin(Stdio::null())
         .kill_on_drop(true);
     out.progress(&format!(
@@ -1359,6 +1359,16 @@ pub async fn casaos_apply(cfg: &HelperConfig, app: &str, out: &mut Out<'_>) -> R
     tokio::time::timeout(Duration::from_secs(120), fut)
         .await
         .map_err(|_| "casaos-cli didn't finish within 2 minutes".to_string())?
+}
+
+/// HOME for `docker` commands: root's when running as root (the normal case, so the user's own
+/// Docker config is never used), else the caller's (tests running the helper unprivileged).
+fn docker_home() -> String {
+    if rustix::process::geteuid().is_root() {
+        "/root".into()
+    } else {
+        std::env::var("HOME").unwrap_or_else(|_| "/root".into())
+    }
 }
 
 #[cfg(test)]

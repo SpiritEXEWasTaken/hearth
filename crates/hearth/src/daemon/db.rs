@@ -78,7 +78,45 @@ const MIGRATIONS: &[&str] = &[
         fixes TEXT NOT NULL,
         updated_at INTEGER NOT NULL
      );",
+    // 4: web UI accounts and sessions
+    "CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_login_at INTEGER
+     );
+     CREATE TABLE sessions (
+        hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        csrf TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        ip TEXT,
+        user_agent TEXT
+     );",
 ];
+
+/// A web UI account.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    /// "admin" or "viewer".
+    pub role: String,
+    pub created_at: i64,
+    pub last_login_at: Option<i64>,
+}
+
+/// A signed-in browser session, looked up by its cookie.
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub user: User,
+    pub csrf: String,
+    pub last_seen_at: i64,
+}
 
 /// Settings with their defaults.
 pub const SETTINGS: &[(&str, &str, &str)] = &[
@@ -188,6 +226,170 @@ impl Db {
 
     pub fn revoke_token(&self, id: &str) -> rusqlite::Result<bool> {
         Ok(self.conn.execute("DELETE FROM tokens WHERE id = ?1", [id])? > 0)
+    }
+
+    // ----- users and sessions -----
+
+    pub fn count_users(&self) -> rusqlite::Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+    }
+
+    pub fn count_admins(&self) -> rusqlite::Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM users WHERE role = 'admin'", [], |r| {
+                r.get(0)
+            })
+    }
+
+    pub fn create_user(&self, id: &str, username: &str, hash: &str, role: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO users (id, username, hash, role, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, username, hash, role, now()],
+        )?;
+        Ok(())
+    }
+
+    fn user_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
+        Ok(User {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            role: r.get(2)?,
+            created_at: r.get(3)?,
+            last_login_at: r.get(4)?,
+        })
+    }
+
+    pub fn list_users(&self) -> rusqlite::Result<Vec<User>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, username, role, created_at, last_login_at FROM users ORDER BY created_at")?;
+        let rows = stmt.query_map([], Self::user_row)?;
+        rows.collect()
+    }
+
+    pub fn get_user(&self, id_or_name: &str) -> rusqlite::Result<Option<User>> {
+        self.conn
+            .query_row(
+                "SELECT id, username, role, created_at, last_login_at FROM users
+                 WHERE id = ?1 OR username = ?1",
+                [id_or_name],
+                Self::user_row,
+            )
+            .optional()
+    }
+
+    /// The user and their password hash, by username.
+    pub fn user_with_hash(&self, username: &str) -> rusqlite::Result<Option<(User, String)>> {
+        self.conn
+            .query_row(
+                "SELECT id, username, role, created_at, last_login_at, hash FROM users WHERE username = ?1",
+                [username],
+                |r| Ok((Self::user_row(r)?, r.get(5)?)),
+            )
+            .optional()
+    }
+
+    pub fn password_hash(&self, user_id: &str) -> rusqlite::Result<Option<String>> {
+        self.conn
+            .query_row("SELECT hash FROM users WHERE id = ?1", [user_id], |r| r.get(0))
+            .optional()
+    }
+
+    pub fn set_password(&self, user_id: &str, hash: &str) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn
+            .execute("UPDATE users SET hash = ?1 WHERE id = ?2", params![hash, user_id])?
+            > 0)
+    }
+
+    pub fn set_role(&self, user_id: &str, role: &str) -> rusqlite::Result<bool> {
+        Ok(self
+            .conn
+            .execute("UPDATE users SET role = ?1 WHERE id = ?2", params![role, user_id])?
+            > 0)
+    }
+
+    pub fn delete_user(&self, user_id: &str) -> rusqlite::Result<bool> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE user_id = ?1", [user_id])?;
+        Ok(self.conn.execute("DELETE FROM users WHERE id = ?1", [user_id])? > 0)
+    }
+
+    pub fn record_login(&self, user_id: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE users SET last_login_at = ?1 WHERE id = ?2",
+            params![now(), user_id],
+        )?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_session(
+        &self,
+        token: &str,
+        user_id: &str,
+        csrf: &str,
+        expires_at: i64,
+        ip: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let t = now();
+        self.conn.execute(
+            "INSERT INTO sessions (hash, user_id, csrf, created_at, expires_at, last_seen_at, ip, user_agent)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?6, ?7)",
+            params![hash_token(token), user_id, csrf, t, expires_at, ip, user_agent],
+        )?;
+        Ok(())
+    }
+
+    /// The session for a cookie value, if it exists and hasn't expired.
+    pub fn session(&self, token: &str) -> rusqlite::Result<Option<Session>> {
+        self.conn
+            .query_row(
+                "SELECT u.id, u.username, u.role, u.created_at, u.last_login_at, s.csrf, s.last_seen_at
+                 FROM sessions s JOIN users u ON u.id = s.user_id
+                 WHERE s.hash = ?1 AND s.expires_at > ?2",
+                params![hash_token(token), now()],
+                |r| {
+                    Ok(Session {
+                        user: Self::user_row(r)?,
+                        csrf: r.get(5)?,
+                        last_seen_at: r.get(6)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Slides the session's expiry forward.
+    pub fn touch_session(&self, token: &str, expires_at: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET last_seen_at = ?1, expires_at = ?2 WHERE hash = ?3",
+            params![now(), expires_at, hash_token(token)],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_session(&self, token: &str) -> rusqlite::Result<()> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE hash = ?1", [hash_token(token)])?;
+        Ok(())
+    }
+
+    /// Signs a user out everywhere, except (optionally) the session making the change.
+    pub fn delete_user_sessions(&self, user_id: &str, keep_token: Option<&str>) -> rusqlite::Result<()> {
+        let keep = keep_token.map(hash_token).unwrap_or_default();
+        self.conn.execute(
+            "DELETE FROM sessions WHERE user_id = ?1 AND hash != ?2",
+            params![user_id, keep],
+        )?;
+        Ok(())
+    }
+
+    pub fn purge_expired_sessions(&self) -> rusqlite::Result<usize> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE expires_at <= ?1", [now()])
     }
 
     // ----- registry cache -----

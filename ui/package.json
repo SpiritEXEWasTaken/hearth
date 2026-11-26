@@ -1,0 +1,27 @@
+{
+	"name": "hearth-ui",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"license": "Apache-2.0 OR MIT",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test:e2e": "playwright test"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.65.1",
+		"@sveltejs/adapter-static": "^4.0.1",
+		"@sveltejs/kit": "^3.4.1",
+		"@sveltejs/vite-plugin-svelte": "^7.3.2",
+		"@types/node": "^26.6.11",
+		"svelte": "^5.59.2",
+		"svelte-check": "^4.7.8",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.8"
+	},
+	"imports": {
+		"#lib/*": "./src/lib/*"
+	}
+}

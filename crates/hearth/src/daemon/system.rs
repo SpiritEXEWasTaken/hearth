@@ -82,11 +82,7 @@ fn ok<T: serde::Serialize>(data: T) -> ApiResult<T> {
 }
 
 fn actor(p: &Principal) -> String {
-    match (&p.token_id, p.uid) {
-        (Some(t), _) => format!("token:{t}"),
-        (None, Some(uid)) => format!("uid:{uid}"),
-        _ => "unknown".into(),
-    }
+    p.actor()
 }
 
 async fn get_system(AxState(st): AxState<State>, p: Principal) -> ApiResult<Value> {

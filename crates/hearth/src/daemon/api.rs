@@ -61,6 +61,8 @@ pub fn router(state: State) -> Router {
         .route("/v1/tokens/{id}", delete(revoke_token))
         .merge(super::api_changes::routes())
         .merge(super::system::routes())
+        .merge(super::web_auth::routes())
+        .merge(super::web::api_routes())
         .with_state(state)
 }
 
@@ -288,7 +290,7 @@ async fn revoke_token(
     ok(serde_json::json!({ "revoked": id }))
 }
 
-fn random_hex(bytes: usize) -> Result<String, Error> {
+pub(super) fn random_hex(bytes: usize) -> Result<String, Error> {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf).map_err(|e| Error::Other(format!("random: {e}")))?;
     Ok(hex::encode(buf))

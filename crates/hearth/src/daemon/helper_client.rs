@@ -31,6 +31,13 @@ impl HelperClient {
             .map_err(|_| "helper request timed out".to_string())?
     }
 
+    /// Like [`call`](Self::call), with a longer time limit.
+    pub async fn call_long(&self, req: &Request, timeout: Duration) -> Result<Value, String> {
+        tokio::time::timeout(timeout, self.call_stream(req, |_| {}))
+            .await
+            .map_err(|_| "helper request timed out".to_string())?
+    }
+
     /// A request that may stream progress lines before its final response. Long operations
     /// (pulls, backups) have no overall timeout, but the helper must say something at least
     /// every `IDLE_TIMEOUT`.

@@ -13,7 +13,10 @@ mod kinds;
 mod migrate;
 pub mod stats;
 mod system;
+mod tls;
 mod versions;
+mod web;
+mod web_auth;
 
 use db::Db;
 use hearth_registry::RegistryClient;
@@ -35,6 +38,8 @@ pub struct DaemonConfig {
     /// Values for `PUID`/`PGID` when a compose file expects them.
     pub puid: u32,
     pub pgid: u32,
+    /// Addresses for the HTTPS web UI (empty: no web UI).
+    pub web_listen: Vec<std::net::SocketAddr>,
 }
 
 impl Default for DaemonConfig {
@@ -47,6 +52,7 @@ impl Default for DaemonConfig {
             check_interval: Duration::from_secs(6 * 3600),
             puid: 1000,
             pgid: 1000,
+            web_listen: vec!["[::]:443".parse().expect("address")],
         }
     }
 }
@@ -61,6 +67,9 @@ pub struct State {
     jobs: Arc<jobs::Jobs>,
     host: Arc<HostDefaults>,
     system: Arc<system::SystemState>,
+    certs: Arc<tls::CertStore>,
+    web: Arc<web_auth::WebAuth>,
+    state_dir: PathBuf,
 }
 
 /// Values filled into compose files that expect a manager to provide them.
@@ -99,15 +108,19 @@ impl State {
 pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
     std::fs::create_dir_all(&cfg.state_dir).map_err(|e| format!("{}: {e}", cfg.state_dir.display()))?;
     let db = Db::open(&cfg.state_dir.join("hearth.db")).map_err(|e| format!("database: {e}"))?;
+    let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_string())
+        .unwrap_or_else(|_| "localhost".into());
     let registry =
         RegistryClient::new(concat!("hearth/", env!("CARGO_PKG_VERSION"))).map_err(|e| e.to_string())?;
     let state = State {
         helper: HelperClient::new(cfg.helper_socket.clone()),
         db: Arc::new(Mutex::new(db)),
         registry: Arc::new(registry),
-        hostname: std::fs::read_to_string("/proc/sys/kernel/hostname")
-            .map(|h| h.trim().to_string())
-            .unwrap_or_else(|_| "localhost".into()),
+        certs: Arc::new(tls::CertStore::new(&cfg.state_dir, &hostname)),
+        web: Arc::new(web_auth::WebAuth::new(&cfg.state_dir)),
+        state_dir: cfg.state_dir.clone(),
+        hostname,
         check_lock: Arc::new(tokio::sync::Mutex::new(())),
         jobs: Arc::new(jobs::Jobs::default()),
         host: Arc::new(HostDefaults {
@@ -147,6 +160,21 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
     ));
 
     tokio::spawn(system::scheduler(state.clone()));
+
+    if !cfg.web_listen.is_empty() {
+        let users = state.with_db(|db| db.count_users()).unwrap_or(0);
+        state.web.init(users);
+        // The local certificate must exist before the first connection; Tailscale's comes later.
+        let certs = state.certs.clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || certs.refresh_local())
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()))
+        {
+            tracing::warn!("local HTTPS certificate: {e}");
+        }
+        tokio::spawn(tls::refresher(state.clone()));
+        tokio::spawn(web::serve(state.clone(), cfg.web_listen.clone()));
+    }
 
     tracing::info!(socket = %cfg.socket.display(), "daemon listening");
     let app = api::router(state).into_make_service_with_connect_info::<auth::Peer>();

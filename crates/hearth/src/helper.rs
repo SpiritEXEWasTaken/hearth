@@ -284,6 +284,9 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         Request::BackupCasaos => helper_apps::backup_casaos(cfg, out).await,
         Request::DumpPostgres { app, service } => helper_apps::dump_postgres(cfg, &app, &service, out).await,
         Request::CasaosApply { app } => helper_apps::casaos_apply(cfg, &app, out).await,
+        Request::TailscaleCerts => crate::helper_tls::tailscale_certs()
+            .await
+            .map(|c| serde_json::to_value(c).unwrap_or(Value::Null)),
         Request::SystemInfo => Ok(serde_json::to_value(sysupdate::info().await).unwrap_or(Value::Null)),
         Request::SystemUpdates { refresh } => {
             let r = with_progress(out, |tx| async move { sysupdate::updates(refresh, &tx).await }).await;

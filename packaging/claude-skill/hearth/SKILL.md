@@ -136,6 +136,14 @@ hearth app set <app> [--title T] [--port P] [--url U] [--dashboard|--no-dashboar
 - Never add a native app that runs as root, and never stop a service the person relies on (SSH,
   Tailscale, Samba, `claude-remote-control`), without asking first.
 
+## Web UI accounts
+
+The web UI (`https://<server>/`) has its own accounts. Read-only: `hearth web status` (addresses,
+certificates), `hearth web users`. Never print or share the setup code (`hearth web setup-code`) unless the
+person asks for it. Account changes need root or an admin token, and passwords are read from stdin:
+`sudo hearth web user-add NAME --role viewer|admin`, `user-password NAME`, `user-role NAME ROLE`,
+`user-remove NAME`. Don't create admin accounts on your own initiative.
+
 ## Migrating from CasaOS
 
 `hearth migrate casaos --json` is read-only. `backup`, `adopt <app> [--fix ID]` and `undo <app>`

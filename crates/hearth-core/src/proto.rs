@@ -148,6 +148,12 @@ pub enum Request {
         app: String,
     },
 
+    // ----- M5: HTTPS -----
+    /// Certificates for this machine's Tailscale names (from tailscaled's LocalAPI, which only
+    /// root or the Tailscale operator may use). Empty when Tailscale isn't running or has no
+    /// HTTPS certificates enabled.
+    TailscaleCerts,
+
     // ----- M4: system updates (package manager, Flatpak) -----
     /// Distro, package backends and whether a reboot is needed.
     SystemInfo,
@@ -463,4 +469,12 @@ mod tests {
         assert!(!is_valid_app_name(".hidden"));
         assert!(!is_valid_app_name(""));
     }
+}
+
+/// A certificate and its private key for one Tailscale name (PEM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailscaleCert {
+    pub domain: String,
+    pub cert_pem: String,
+    pub key_pem: String,
 }

@@ -129,6 +129,9 @@ pub enum Command {
     /// API tokens (for Claude, scripts and the Android app). Needs root or an admin token.
     #[command(subcommand)]
     Token(TokenCmd),
+    /// The web UI: setup code, HTTPS certificates, user accounts.
+    #[command(subcommand)]
+    Web(WebCmd),
     /// Run the Hearth daemon (used by the systemd unit).
     #[command(hide = true)]
     Daemon(DaemonArgs),
@@ -432,6 +435,29 @@ pub enum TokenCmd {
     Revoke { id: String },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum WebCmd {
+    /// Show the one-time code for creating the first admin account in the web UI.
+    SetupCode,
+    /// Web UI addresses and HTTPS certificates.
+    Status,
+    /// List web UI accounts.
+    Users,
+    /// Add a web UI account (needs root or an admin token). The password is read from stdin.
+    UserAdd {
+        username: String,
+        /// admin or viewer (read-only).
+        #[arg(long, default_value = "viewer")]
+        role: String,
+    },
+    /// Set a new password for an account (e.g. a forgotten admin password). Read from stdin.
+    UserPassword { username: String },
+    /// Change an account's role (admin or viewer).
+    UserRole { username: String, role: String },
+    /// Remove a web UI account.
+    UserRemove { username: String },
+}
+
 #[derive(Debug, Args)]
 pub struct DaemonArgs {
     #[arg(long, default_value = "/run/hearth-helper/helper.sock")]
@@ -447,6 +473,9 @@ pub struct DaemonArgs {
     /// Value for PGID in compose files that expect one.
     #[arg(long, default_value_t = 1000)]
     pub pgid: u32,
+    /// Where the HTTPS web UI listens: comma-separated addresses, or "off".
+    #[arg(long, env = "HEARTH_WEB_LISTEN", default_value = "[::]:443")]
+    pub web_listen: String,
 }
 
 #[derive(Debug, Args)]
@@ -462,6 +491,12 @@ pub struct HelperArgs {
     pub casaos_apps_dir: PathBuf,
     #[arg(long, default_value = "/usr/bin/docker")]
     pub docker_bin: PathBuf,
+    /// Testing aid: where app folders, data and removed apps live (default /var/lib/hearth).
+    #[arg(long, default_value = "/var/lib/hearth", hide = true)]
+    pub lib_dir: PathBuf,
+    /// Testing aid: where backups go (default /var/backups/hearth).
+    #[arg(long, default_value = "/var/backups/hearth", hide = true)]
+    pub backups_dir: PathBuf,
     /// Testing aid: print this host's system info and update list as JSON, then exit.
     /// `refresh` also downloads the package lists; `upgrade-security` / `upgrade-all` install
     /// updates first (all need root).

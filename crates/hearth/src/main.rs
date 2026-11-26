@@ -8,12 +8,14 @@ mod daemon;
 mod fixes;
 mod helper;
 mod helper_apps;
+mod helper_tls;
 mod helper_units;
 mod render;
 mod system_cli;
 mod sysupdate;
 mod unixhttp;
 mod users;
+mod web_cli;
 
 use clap::Parser;
 use cli::{AppCmd, AppsCmd, Cli, Command, TokenCmd};
@@ -142,6 +144,7 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 }
             }
         }
+        Command::Web(cmd) => return web_cli::run(cmd, g).await,
         Command::Daemon(a) => {
             init_logging();
             let cfg = daemon::DaemonConfig {
@@ -151,6 +154,7 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 check_interval: Duration::from_secs(a.check_interval.max(600)),
                 puid: a.puid,
                 pgid: a.pgid,
+                web_listen: parse_listen(&a.web_listen)?,
                 ..Default::default()
             };
             daemon::run(cfg).await.map_err(Error::Other)?;
@@ -200,6 +204,10 @@ async fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 casaos_apps_dir: a.casaos_apps_dir.clone(),
                 daemon_gid: users::primary_gid_of(&a.daemon_user),
                 docker_bin: a.docker_bin.clone(),
+                apps_dir: a.lib_dir.join("apps"),
+                removed_dir: a.lib_dir.join("removed"),
+                data_dir: a.lib_dir.join("data"),
+                backups_dir: a.backups_dir.clone(),
                 ..Default::default()
             };
             helper::run(cfg).await?;
@@ -321,9 +329,23 @@ impl VersionInfo {
     }
 }
 
-fn print_json<T: Serialize>(value: &T) {
+pub(crate) fn print_json<T: Serialize>(value: &T) {
     match serde_json::to_string(value) {
         Ok(s) => println!("{s}"),
         Err(e) => eprintln!("hearth: failed to encode JSON: {e}"),
     }
+}
+
+/// `[::]:443,127.0.0.1:9443` or `off`.
+fn parse_listen(s: &str) -> Result<Vec<std::net::SocketAddr>, Error> {
+    if s.trim().eq_ignore_ascii_case("off") || s.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    s.split(',')
+        .map(|a| {
+            a.trim()
+                .parse()
+                .map_err(|_| Error::Usage(format!("--web-listen: '{a}' isn't an address like [::]:443")))
+        })
+        .collect()
 }

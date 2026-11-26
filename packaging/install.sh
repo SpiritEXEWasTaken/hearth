@@ -74,3 +74,11 @@ else
     echo "Hearth did not start. See: journalctl -u hearth -u hearth-helper" >&2
     exit 1
 fi
+
+# First-time web UI setup: show where to go and the one-time code.
+sleep 1
+if code=$(/usr/local/bin/hearth web setup-code --json 2>/dev/null | sed -n 's/.*"code":"\([A-Z0-9-]*\)".*/\1/p') && [ -n "$code" ]; then
+    echo
+    echo "Web UI: https://$(hostname)/ (or this server's IP address, or its Tailscale name)"
+    echo "Create the admin account there with this setup code: $code"
+fi

@@ -24,11 +24,7 @@ fn ok<T: serde::Serialize>(data: T) -> ApiResult<T> {
 }
 
 fn actor(p: &Principal) -> String {
-    match (&p.token_id, p.uid) {
-        (Some(t), _) => format!("token:{t}"),
-        (None, Some(uid)) => format!("uid:{uid}"),
-        _ => "unknown".into(),
-    }
+    p.actor()
 }
 
 fn can_write(p: &Principal) -> Result<(), ApiError> {

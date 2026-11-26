@@ -30,7 +30,7 @@ sudo "$BIN" helper --helper-socket "$HSOCK" --daemon-user "$(id -un)" --docker-s
 pids+=($!)
 for _ in $(seq 50); do [ -S "$HSOCK" ] && break; sleep 0.1; done
 
-"$BIN" daemon --socket "$SOCK" --helper-socket "$HSOCK" --state-dir "$T/state" >"$T/daemon.log" 2>&1 &
+"$BIN" daemon --socket "$SOCK" --helper-socket "$HSOCK" --state-dir "$T/state" --web-listen 127.0.0.1:9443 >"$T/daemon.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 
@@ -94,6 +94,13 @@ set +e
 h app info smokeweb --json >/dev/null; code=$?
 set -e
 [ "$code" = 3 ] || { echo "expected the app to be gone (exit 3), got $code"; exit 1; }
+
+echo "== web UI over HTTPS"
+for _ in $(seq 50); do curl -sk -o /dev/null https://127.0.0.1:9443/ && break; sleep 0.2; done
+curl -skf https://127.0.0.1:9443/v1/setup | grep -q '"needed":true'
+curl -skf https://127.0.0.1:9443/ | grep -qi '<html'
+# Network clients get nothing without signing in.
+[ "$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9443/v1/status)" = 403 ]
 
 echo "== idle memory"
 sleep 3

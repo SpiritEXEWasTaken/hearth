@@ -37,8 +37,15 @@ pub async fn request(
         let mut req = http::Request::builder()
             .method(method)
             .uri(path_and_query)
-            .header("host", "localhost");
-        for (k, v) in headers {
+            .header(
+                "host",
+                headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("host"))
+                    .map(|(_, v)| v.as_str())
+                    .unwrap_or("localhost"),
+            );
+        for (k, v) in headers.iter().filter(|(k, _)| !k.eq_ignore_ascii_case("host")) {
             req = req.header(*k, v);
         }
         if body.is_some() {
