@@ -24,6 +24,13 @@ export default defineConfig({
 			use: { viewport: { width: 1280, height: 860 } }
 		},
 		{
+			// Real system updates and packages: run against a disposable VM with
+			// HEARTH_SYSTEM_URL (and HEARTH_SYSTEM_SETUP_CODE on its first run).
+			name: 'system',
+			testMatch: /04-system\.spec\.ts/,
+			use: { baseURL: process.env.HEARTH_SYSTEM_URL, viewport: { width: 1280, height: 860 } }
+		},
+		{
 			name: 'phone',
 			testMatch: /03-phone\.spec\.ts/,
 			dependencies: ['desktop'],

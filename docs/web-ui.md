@@ -50,7 +50,7 @@ DuckDNS (DNS-01, no open ports), and the Home Assistant proxy fix.
   sites.
 - The daemon's systemd unit gains only `CAP_NET_BIND_SERVICE` (to use port 443).
 
-## Pages (M5a)
+## Pages
 
 - **Home:** CPU, memory, storage and app widgets; a tile per app with a web page (opens it, using
   the address you reached Hearth by); other apps and services listed below.
@@ -58,9 +58,16 @@ DuckDNS (DNS-01, no open ports), and the Home Assistant proxy fix.
   versions, service state), Logs (live, searchable, per part), Settings (the compose file with a diff
   review before applying), Updates, Backups, History (go back to any revision). Start, stop and
   restart show the change's progress live, and failed changes report the automatic rollback.
+- **System** (M5b): *Updates* lists OS and Flatpak updates (security ones first), with "install the
+  security updates", "install all" or a selection, always through a confirmation that shows exactly
+  what will be installed; the automatic daily security updates switch (off by default); a "restart
+  needed" notice (Hearth never restarts the server). *Packages* searches the package manager and
+  Flathub (best matches first), shows details, and installs or removes after showing the full plan
+  (dependencies included). Removing something the server needs to stay reachable (SSH, Docker, the
+  kernel…) needs an extra tick. The home page shows a line when system updates are waiting.
 - **Settings:** your password, users, HTTPS, API tokens.
 
-The container console moves to M7 with the web terminal. System updates and packages pages are M5b.
+The container console moves to M7 with the web terminal.
 
 ## Development
 
@@ -70,4 +77,6 @@ HEARTH_URL=https://127.0.0.1:9443 npm run dev    # UI with hot reload, API proxi
 npm run check && npm run build                   # what CI runs; cargo embeds ui/build
 ```
 
-End-to-end tests: see [ui/tests/README.md](../ui/tests/README.md) (CI runs them as `ci/e2e.sh`).
+End-to-end tests: see [ui/tests/README.md](../ui/tests/README.md) (CI runs them as `ci/e2e.sh`). The
+System tests (`tests/04-system.spec.ts`) really install packages and updates, so they only run against a
+throwaway VM: `HEARTH_SYSTEM_URL=https://<vm> HEARTH_SYSTEM_SETUP_CODE=<code> npx playwright test --project system`.

@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { get, errorText } from '#lib/api.ts';
 	import { session } from '#lib/session.svelte.ts';
-	import type { Status, App } from '#lib/types.ts';
+	import type { Status, App, SystemState } from '#lib/types.ts';
 	import { bytes, percent, duration, openUrl, updateCount, stateLabel, kindLabel } from '#lib/format.ts';
 	import Meter from '#lib/components/Meter.svelte';
 	import AppIcon from '#lib/components/AppIcon.svelte';
@@ -20,8 +20,14 @@
 		}
 	}
 
+	let sys = $state<SystemState | null>(null);
+
 	onMount(() => {
 		load();
+		// Once per visit: the update list only changes when it's checked (twice a day or by hand).
+		get<SystemState>('/v1/system')
+			.then((v) => (sys = v))
+			.catch(() => {});
 		const t = setInterval(() => {
 			if (document.visibilityState === 'visible') load();
 		}, 5000);
@@ -91,6 +97,23 @@
 			</div>
 		</a>
 	</section>
+
+	{#if sys && (sys.updates.updates.length || sys.info.reboot.needed)}
+		{@const n = sys.updates.updates.length}
+		{@const sec = sys.updates.updates.filter((u) => u.security).length}
+		<a class="sysline card" class:warn={sys.info.reboot.needed || sec > 0} href="/system">
+			<Icon name="shield" size={20} />
+			<span class="grow">
+				{#if n}
+					<strong>{n} system update{n === 1 ? '' : 's'}</strong>{#if sec}<span>, {sec} for security</span>{/if}
+				{/if}
+				{#if sys.info.reboot.needed}
+					<span class="badge warn">Restart needed</span>
+				{/if}
+			</span>
+			<Icon name="chevron" size={16} />
+		</a>
+	{/if}
 
 	{#if status.warnings.length}
 		<div class="notice warn">
@@ -207,6 +230,25 @@
 	}
 	.summary .detail {
 		font-size: 0.8rem;
+	}
+	.sysline {
+		display: flex;
+		align-items: center;
+		gap: 0.7rem;
+		padding: 0.75rem 1rem;
+		margin: -0.6rem 0 1.4rem;
+		color: var(--text);
+		text-decoration: none;
+	}
+	.sysline.warn {
+		border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+	}
+	.sysline .grow {
+		flex: 1;
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		flex-wrap: wrap;
 	}
 	.section-head {
 		display: flex;

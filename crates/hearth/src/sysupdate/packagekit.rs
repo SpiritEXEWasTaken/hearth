@@ -290,6 +290,16 @@ pub async fn updates(refresh: bool, tx: &Tx) -> Result<Vec<SystemUpdate>, String
                 .get(&(name.to_string(), arch.to_string()))
                 .or_else(|| installed.iter().find(|((n, _), _)| n == name).map(|(_, v)| v))
                 .cloned();
+            let (repo, new_package) = update_repo(data);
+            let mut security = p.info & 0xffff == INFO_SECURITY;
+            let mut sev = severity(p.info).to_string();
+            // A package an update pulls in (e.g. a new kernel image): PackageKit gives it no
+            // severity. It belongs to its parent update, so it counts as security when it comes
+            // from the security channel.
+            if new_package && sev == "unknown" {
+                sev = "new".into();
+                security |= repo.as_deref().is_some_and(|r| r.contains("security"));
+            }
             SystemUpdate {
                 id: format!("packagekit:{}", p.id),
                 backend: "packagekit".into(),
@@ -297,13 +307,22 @@ pub async fn updates(refresh: bool, tx: &Tx) -> Result<Vec<SystemUpdate>, String
                 arch: Some(arch.to_string()).filter(|a| !a.is_empty()),
                 current_version: current,
                 new_version: version.to_string(),
-                repo: Some(data.to_string()).filter(|d| !d.is_empty()),
-                security: p.info & 0xffff == INFO_SECURITY,
-                severity: severity(p.info).to_string(),
+                repo,
+                security,
+                severity: sev,
                 summary: p.summary,
             }
         })
         .collect())
+}
+
+/// The repository of an update from its package id's data field, and whether it's a package
+/// that isn't installed yet (data like `+auto:debian-security`).
+fn update_repo(data: &str) -> (Option<String>, bool) {
+    let new_package = data.starts_with('+');
+    let repo = data.trim_start_matches('+');
+    let repo = repo.rsplit(':').next().unwrap_or(repo);
+    (Some(repo.to_string()).filter(|r| !r.is_empty()), new_package)
 }
 
 /// Installs the given PackageKit package ids (`name;version;arch;data`).
@@ -543,6 +562,19 @@ pub async fn change(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_repo_strips_new_package_marker() {
+        assert_eq!(
+            update_repo("+auto:debian-security"),
+            (Some("debian-security".into()), true)
+        );
+        assert_eq!(
+            update_repo("debian-security"),
+            (Some("debian-security".into()), false)
+        );
+        assert_eq!(update_repo(""), (None, false));
+    }
 
     #[test]
     fn package_ids_split() {

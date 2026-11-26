@@ -20,6 +20,12 @@ test('phone: bottom bar, tiles fit, app page usable', async ({ page }) => {
 	expect(overflow2).toBeLessThanOrEqual(0);
 	await page.screenshot({ path: 'test-results/phone-app.png', fullPage: true });
 
+	await bar.getByRole('link', { name: 'System' }).click();
+	await expect(page.getByRole('tab', { name: 'Packages' })).toBeVisible();
+	await expect(page.getByText(/kernel/)).toBeVisible();
+	const overflow3 = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+	expect(overflow3).toBeLessThanOrEqual(0);
+
 	await bar.getByRole('link', { name: 'Settings' }).click();
 	await expect(page.getByRole('heading', { name: 'Your account' })).toBeVisible();
 });

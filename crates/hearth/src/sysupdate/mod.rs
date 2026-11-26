@@ -292,8 +292,34 @@ pub async fn package_search(terms: &[String], backend: &str) -> Result<Vec<Packa
     } else if backend == "flatpak" {
         return Err("Flatpak isn't installed".into());
     }
+    rank_search(&mut out, terms);
     out.truncate(500);
     Ok(out)
+}
+
+/// Best matches first, so the cut at 500 keeps them: exact name, then names starting with the
+/// search, then names containing every word, then the rest (matches in descriptions). Installed
+/// packages win ties; otherwise the backend's order is kept.
+pub fn rank_search(list: &mut [PackageEntry], terms: &[String]) {
+    let query = terms.join(" ").to_lowercase();
+    let words: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+    let score = |p: &PackageEntry| -> i64 {
+        let n = p.name.to_lowercase();
+        let len = n.len().min(100) as i64;
+        let s = if n == query {
+            1000
+        } else if n.starts_with(&query) {
+            500 - len
+        } else if words.iter().all(|w| n.contains(w.as_str())) {
+            300 - len
+        } else if words.iter().any(|w| n.contains(w.as_str())) {
+            100
+        } else {
+            0
+        };
+        s * 2 + i64::from(p.installed)
+    };
+    list.sort_by_cached_key(|p| std::cmp::Reverse(score(p)));
 }
 
 pub async fn package_info(name: &str, backend: &str) -> Result<PackageDetail, String> {
@@ -345,6 +371,29 @@ pub async fn package_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_ranks_exact_names_first() {
+        let e = |n: &str, installed: bool| PackageEntry {
+            backend: "packagekit".into(),
+            name: n.into(),
+            version: "1".into(),
+            arch: None,
+            repo: None,
+            installed,
+            summary: String::new(),
+        };
+        let mut l = vec![
+            e("acpica-tools", false),
+            e("slurm", false),
+            e("sl", false),
+            e("busl", false),
+            e("slack", true),
+        ];
+        rank_search(&mut l, &["sl".to_string()]);
+        let names: Vec<&str> = l.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["sl", "slack", "slurm", "busl", "acpica-tools"]);
+    }
 
     #[test]
     fn os_release_parses() {

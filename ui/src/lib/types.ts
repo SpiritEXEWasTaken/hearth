@@ -169,3 +169,75 @@ export interface TokenInfo {
 	created_at: number;
 	last_used_at: number | null;
 }
+
+// ----- system updates and packages -----
+
+export interface BackendInfo {
+	kind: string;
+	available: boolean;
+	detail: string;
+	note?: string;
+}
+
+export interface RebootStatus {
+	needed: boolean;
+	reasons: string[];
+}
+
+export interface SystemUpdate {
+	id: string;
+	backend: string;
+	name: string;
+	arch?: string;
+	current_version?: string;
+	new_version: string;
+	repo?: string;
+	security: boolean;
+	severity: string;
+	summary: string;
+}
+
+export interface SystemState {
+	info: { distro_id: string; distro_name: string; kernel: string; backends: BackendInfo[]; reboot: RebootStatus };
+	updates: { checked_at: number; updates: SystemUpdate[]; errors: string[]; reboot: RebootStatus };
+}
+
+export interface UpgradePlan {
+	updates: SystemUpdate[];
+	notes: string[];
+	checked_at: number;
+}
+
+export interface PackageEntry {
+	backend: string;
+	name: string;
+	version: string;
+	arch?: string;
+	repo?: string;
+	installed: boolean;
+	summary: string;
+}
+
+export interface PackageDetail extends PackageEntry {
+	installed_version?: string;
+	description: string;
+	url?: string;
+	license?: string;
+	size_bytes?: number;
+}
+
+export interface PackagePlan {
+	action: 'install' | 'remove';
+	backend: string;
+	names: string[];
+	install: PackageEntry[];
+	remove: PackageEntry[];
+	update: PackageEntry[];
+	warnings: string[];
+	errors: string[];
+}
+
+export interface Setting {
+	value: string;
+	description: string;
+}

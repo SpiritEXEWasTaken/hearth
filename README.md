@@ -4,7 +4,7 @@ A lightweight home-server manager: Docker Compose apps, a curated app store, OS 
 files, storage, users and a web terminal. It's one static Rust binary, has a web UI and an Android app, and
 uses under 30 MB of RAM when idle.
 
-> **Status: early development (M5a done: web UI over HTTPS with sign-in, dashboard and app pages).** Hearth shows every app (CasaOS,
+> **Status: early development (M5b done: web UI over HTTPS with sign-in, dashboard, app pages, system updates and packages).** Hearth shows every app (CasaOS,
 > compose, rootless Docker) with state, health, memory and versions, and manages its own apps
 > (install, start/stop that persists, apply, update, revert, backup/restore) with health checks and
 > automatic rollback. CasaOS apps can be adopted in place, without restarting them; see
