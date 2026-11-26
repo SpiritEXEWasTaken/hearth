@@ -2,6 +2,7 @@
 
 mod api;
 mod api_changes;
+mod app_https;
 pub mod apps;
 mod auth;
 pub mod db;
@@ -11,6 +12,7 @@ mod helper_client;
 mod jobs;
 mod kinds;
 mod migrate;
+mod proxy;
 pub mod stats;
 mod system;
 mod tls;
@@ -69,6 +71,7 @@ pub struct State {
     system: Arc<system::SystemState>,
     certs: Arc<tls::CertStore>,
     web: Arc<web_auth::WebAuth>,
+    proxies: Arc<proxy::Proxies>,
     state_dir: PathBuf,
 }
 
@@ -119,6 +122,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         registry: Arc::new(registry),
         certs: Arc::new(tls::CertStore::new(&cfg.state_dir, &hostname)),
         web: Arc::new(web_auth::WebAuth::new(&cfg.state_dir)),
+        proxies: Arc::new(proxy::Proxies::default()),
         state_dir: cfg.state_dir.clone(),
         hostname,
         check_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -174,6 +178,9 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         }
         tokio::spawn(tls::refresher(state.clone()));
         tokio::spawn(web::serve(state.clone(), cfg.web_listen.clone()));
+        for (app, problem) in state.proxies.sync(&state) {
+            tracing::warn!(app, "app HTTPS: {problem}");
+        }
     }
 
     tracing::info!(socket = %cfg.socket.display(), "daemon listening");

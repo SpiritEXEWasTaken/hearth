@@ -123,6 +123,9 @@ pub struct AppSummary {
     pub health: Option<String>,
     pub memory_bytes: Option<u64>,
     pub web_url: Option<String>,
+    /// Hearth serves the app over HTTPS on this port (https://<server>:<port>).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub https_port: Option<u16>,
     pub icon: Option<String>,
     pub containers: Vec<ContainerSummary>,
     pub images: Vec<ImageVersion>,

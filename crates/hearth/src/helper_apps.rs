@@ -1361,6 +1361,176 @@ pub async fn casaos_apply(cfg: &HelperConfig, app: &str, out: &mut Out<'_>) -> R
         .map_err(|_| "casaos-cli didn't finish within 2 minutes".to_string())?
 }
 
+/// The lines Hearth adds to Home Assistant's configuration.yaml. Hearth's proxy connects from
+/// this machine (127.0.0.1 / ::1 with host networking) or Docker's bridge (172.16.0.0/12).
+pub const HA_HTTP_BLOCK: &str = "http:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - 127.0.0.1\n    - ::1\n    - 172.16.0.0/12\n";
+
+/// What to do with a configuration.yaml: "present" (already trusts proxies), "add" (no `http:`
+/// section: append ours), or "manual" (an `http:` section without proxy trust: the person edits it).
+pub fn ha_config_action(text: &str) -> &'static str {
+    let mut in_http = false;
+    let mut has_http = false;
+    let (mut xff, mut trusted) = (false, false);
+    for line in text.lines() {
+        let top_level =
+            !line.starts_with([' ', '\t']) && !line.trim().is_empty() && !line.trim_start().starts_with('#');
+        if top_level {
+            in_http = line.trim_end().starts_with("http:");
+            has_http |= in_http;
+            continue;
+        }
+        if in_http {
+            let l = line.trim();
+            xff |= l.starts_with("use_x_forwarded_for:") && l.contains("true");
+            trusted |= l.starts_with("trusted_proxies:");
+        }
+    }
+    match (has_http, xff && trusted) {
+        (_, true) => "present",
+        (false, _) => "add",
+        (true, false) => "manual",
+    }
+}
+
+/// Proxy networks in the form Home Assistant stores them.
+pub const HA_PROXIES: &[&str] = &["127.0.0.1/32", "::1/128", "172.16.0.0/12"];
+
+/// What to do with HA's stored HTTP settings (`.storage/http`, Home Assistant 2026.11 and later,
+/// where configuration.yaml's `http:` is only read once and then ignored): "present", "add-storage",
+/// or "manual" with a reason. Returns the changed file text for "add-storage".
+pub fn ha_storage_action(text: &str) -> Result<(&'static str, Option<String>), String> {
+    let mut v: Value =
+        serde_json::from_str(text).map_err(|e| format!("HA's .storage/http isn't valid JSON: {e}"))?;
+    if v.get("key").and_then(Value::as_str) != Some("http")
+        || v.get("version").and_then(Value::as_u64) != Some(3)
+    {
+        return Ok(("manual", None));
+    }
+    let data = v
+        .get_mut("data")
+        .and_then(Value::as_object_mut)
+        .ok_or("no data in .storage/http")?;
+    if !data.get("pending").is_none_or(Value::is_null) {
+        return Ok(("manual", None));
+    }
+    let stable = data
+        .get_mut("stable")
+        .and_then(Value::as_object_mut)
+        .ok_or("no stable settings in .storage/http")?;
+    let mut proxies: Vec<String> = stable
+        .get("trusted_proxies")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    let xff = stable.get("use_x_forwarded_for").and_then(Value::as_bool) == Some(true);
+    if xff && HA_PROXIES.iter().all(|p| proxies.iter().any(|x| x == p)) {
+        return Ok(("present", None));
+    }
+    for p in HA_PROXIES {
+        if !proxies.iter().any(|x| x == p) {
+            proxies.push((*p).to_string());
+        }
+    }
+    stable.insert("use_x_forwarded_for".into(), Value::Bool(true));
+    stable.insert(
+        "trusted_proxies".into(),
+        Value::Array(proxies.into_iter().map(Value::String).collect()),
+    );
+    let out = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    Ok(("add-storage", Some(out)))
+}
+
+/// Finds HA's /config folder in a Hearth app and makes HA trust Hearth's proxy. The caller stops
+/// HA before an "add-storage" write and starts it afterwards (HA rewrites its storage on exit).
+pub async fn ha_trust_proxy(cfg: &HelperConfig, app: &str, dry_run: bool) -> Result<Value, String> {
+    let project = compose_config(cfg, app).await?;
+    let services = project
+        .get("services")
+        .and_then(Value::as_object)
+        .ok_or("the compose project has no services")?;
+    let mut config_dir = None;
+    for svc in services.values() {
+        let image = svc.get("image").and_then(Value::as_str).unwrap_or("");
+        if !image.contains("home-assistant") {
+            continue;
+        }
+        for v in svc.get("volumes").and_then(Value::as_array).into_iter().flatten() {
+            if v.get("type").and_then(Value::as_str) == Some("bind")
+                && v.get("target").and_then(Value::as_str) == Some("/config")
+                && let Some(src) = v.get("source").and_then(Value::as_str)
+            {
+                config_dir = Some(PathBuf::from(src));
+            }
+        }
+    }
+    let dir = config_dir.ok_or("no Home Assistant container with a /config folder in this app")?;
+    if !dir.is_absolute() {
+        return Err("Home Assistant's /config isn't a folder on this machine".into());
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // Home Assistant 2026.11+: the settings live in .storage/http once migrated.
+    let storage = dir.join(".storage").join("http");
+    if let Ok(text) = fs::read_to_string(&storage) {
+        let migrated = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.pointer("/data/yaml_migration_done").and_then(Value::as_bool))
+            .unwrap_or(false);
+        if migrated {
+            let (action, new) = ha_storage_action(&text)?;
+            let mut result = serde_json::json!({
+                "file": storage.display().to_string(),
+                "action": action,
+                "lines": format!("use_x_forwarded_for: true\ntrusted_proxies: {}", HA_PROXIES.join(", ")),
+            });
+            if action == "manual" {
+                result["reason"] = Value::String(
+                    "Home Assistant has an unconfirmed change to its network settings (or a storage format Hearth doesn't know). \
+                     Open Home Assistant's network settings and finish or cancel it first."
+                        .into(),
+                );
+            }
+            if dry_run || action != "add-storage" {
+                return Ok(result);
+            }
+            let backup = storage.with_file_name(format!("http.hearth-backup-{stamp}"));
+            fs::copy(&storage, &backup).map_err(|e| format!("backup {}: {e}", backup.display()))?;
+            fs::write(&storage, new.unwrap_or_default())
+                .map_err(|e| format!("{}: {e}", storage.display()))?;
+            result["backup"] = Value::String(backup.display().to_string());
+            return Ok(result);
+        }
+    }
+
+    // Older Home Assistant (or not migrated yet): configuration.yaml.
+    let file = dir.join("configuration.yaml");
+    let text = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let action = ha_config_action(&text);
+    let mut result = serde_json::json!({
+        "file": file.display().to_string(),
+        "action": action,
+        "lines": HA_HTTP_BLOCK,
+    });
+    if action != "add" || dry_run {
+        return Ok(result);
+    }
+    let backup = dir.join(format!("configuration.yaml.hearth-backup-{stamp}"));
+    fs::copy(&file, &backup).map_err(|e| format!("backup {}: {e}", backup.display()))?;
+    let mut new = text.clone();
+    if !new.ends_with('\n') {
+        new.push('\n');
+    }
+    new.push_str("\n# Added by Hearth: lets Home Assistant work through Hearth's HTTPS address.\n");
+    new.push_str(HA_HTTP_BLOCK);
+    // Rewrite in place so the file keeps its owner and mode.
+    fs::write(&file, new).map_err(|e| format!("{}: {e}", file.display()))?;
+    result["backup"] = Value::String(backup.display().to_string());
+    Ok(result)
+}
+
 /// HOME for `docker` commands: root's when running as root (the normal case, so the user's own
 /// Docker config is never used), else the caller's (tests running the helper unprivileged).
 fn docker_home() -> String {
@@ -1374,6 +1544,60 @@ fn docker_home() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ha_storage_actions() {
+        let fresh = r#"{"version":3,"minor_version":1,"key":"http","data":{"stable":{"server_port":8123,"ip_ban_enabled":true},"pending":null,"yaml_migration_done":true}}"#;
+        let (a, new) = ha_storage_action(fresh).expect("parse");
+        assert_eq!(a, "add-storage");
+        let new = new.expect("text");
+        let v: Value = serde_json::from_str(&new).expect("json");
+        assert_eq!(
+            v.pointer("/data/stable/use_x_forwarded_for"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            v.pointer("/data/stable/server_port"),
+            Some(&serde_json::json!(8123))
+        );
+        assert_eq!(
+            v.pointer("/data/stable/trusted_proxies/1"),
+            Some(&serde_json::json!("::1/128"))
+        );
+        // Applying it again changes nothing.
+        assert_eq!(ha_storage_action(&new).expect("parse").0, "present");
+        // An unconfirmed change in HA: hands off.
+        let pending = fresh.replace("\"pending\":null", "\"pending\":{\"server_port\":8124}");
+        assert_eq!(ha_storage_action(&pending).expect("parse").0, "manual");
+        // Existing proxies are kept.
+        let other = fresh.replace(
+            "\"server_port\":8123",
+            "\"server_port\":8123,\"use_x_forwarded_for\":true,\"trusted_proxies\":[\"10.0.0.0/8\"]",
+        );
+        let (_, new) = ha_storage_action(&other).expect("parse");
+        assert!(new.expect("text").contains("10.0.0.0/8"));
+    }
+
+    #[test]
+    fn ha_config_actions() {
+        assert_eq!(
+            ha_config_action("default_config:\nfrontend:\n  themes: !include_dir_merge_named themes\n"),
+            "add"
+        );
+        assert_eq!(ha_config_action("http:\n  server_port: 8124\n"), "manual");
+        assert_eq!(
+            ha_config_action(
+                "default_config:\nhttp:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - 10.0.0.1\n"
+            ),
+            "present"
+        );
+        assert_eq!(
+            ha_config_action(&format!("default_config:\n\n{HA_HTTP_BLOCK}")),
+            "present"
+        );
+        // A commented-out http: doesn't count.
+        assert_eq!(ha_config_action("# http:\ndefault_config:\n"), "add");
+    }
 
     #[test]
     fn data_deletion_is_limited_to_app_roots() {

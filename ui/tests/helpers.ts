@@ -30,3 +30,25 @@ export async function waitJob(request: APIRequestContext, id: string) {
 	}
 	throw new Error('job did not finish');
 }
+
+/** Signs in, or creates the admin on a fresh server (HEARTH_SYSTEM_SETUP_CODE). */
+export async function signIn(page: Page) {
+	await page.goto('/');
+	const welcome = page.getByRole('heading', { name: 'Welcome to Hearth' });
+	const signin = page.getByRole('button', { name: 'Sign in' });
+	const home = page.getByRole('heading', { name: 'Apps', exact: true });
+	await expect(welcome.or(signin).or(home)).toBeVisible();
+	if (await welcome.isVisible()) {
+		await page.getByLabel('Setup code').fill(process.env.HEARTH_SYSTEM_SETUP_CODE ?? '');
+		await page.getByLabel('Username').fill(ADMIN.username);
+		await page.locator('input[name=password]').fill(ADMIN.password);
+		await page.getByLabel('Password again').fill(ADMIN.password);
+		await page.getByRole('button', { name: 'Create admin account' }).click();
+	} else if (await signin.isVisible()) {
+		await page.getByLabel('Username').fill(ADMIN.username);
+		await page.getByLabel('Password').fill(ADMIN.password);
+		await signin.click();
+	}
+	await expect(home).toBeVisible();
+}
+

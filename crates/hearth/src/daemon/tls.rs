@@ -225,7 +225,11 @@ pub fn local_names(hostname: &str) -> Vec<String> {
         "localhost".to_string(),
     ];
     let mut ips: Vec<IpAddr> = vec!["127.0.0.1".parse().expect("ip"), "::1".parse().expect("ip")];
-    if let Ok(ifs) = if_addrs::get_if_addrs() {
+    let ifs = if_addrs::get_if_addrs().unwrap_or_else(|e| {
+        tracing::warn!("can't list this machine's addresses for the HTTPS certificate: {e}");
+        Vec::new()
+    });
+    {
         for i in ifs {
             let ip = i.ip();
             // Docker bridges and link-local addresses aren't how anyone reaches the server.

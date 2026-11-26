@@ -781,6 +781,57 @@ async fn app(c: &Client, g: &GlobalArgs, cmd: &AppCmd) -> Option<Result<ExitCode
             "updates are applied one app at a time: `hearth app update <app>` (use --all only with --check)"
                 .into(),
         )),
+        AppCmd::Https {
+            app,
+            on,
+            off,
+            port,
+            test,
+        } => {
+            async {
+                let path = format!("/v1/apps/{}/https", enc(app));
+                let mut v: Value = if *on || *off {
+                    if g.dry_run {
+                        dry_out(g, &json!({ "would_set_https": app, "enabled": on, "port": port }));
+                        return Ok(ExitCode::Ok);
+                    }
+                    c.call_put(&path, json!({ "enabled": on, "port": port })).await?
+                } else {
+                    c.get(&path).await?
+                };
+                if *test {
+                    let t: Value = c.post(&format!("{path}/test"), Some(json!({}))).await?;
+                    v["test"] = t;
+                }
+                if g.json {
+                    dry_out(g, &v);
+                } else {
+                    if v["enabled"].as_bool() == Some(true) {
+                        println!(
+                            "HTTPS on port {} → the app's port {}{}",
+                            v["port"],
+                            v["target_port"],
+                            if v["running"].as_bool() == Some(true) { "" } else { " (NOT listening)" }
+                        );
+                        for u in v["urls"].as_array().into_iter().flatten() {
+                            println!("  {}", u.as_str().unwrap_or(""));
+                        }
+                    } else if let Some(why) = v["unavailable"].as_str() {
+                        println!("HTTPS is off; it can't be turned on: {why}");
+                    } else {
+                        println!("HTTPS is off. Turn it on with `hearth app https {app} --on`.");
+                    }
+                    if let Some(t) = v.get("test") {
+                        println!("{}", t["message"].as_str().unwrap_or(""));
+                        if t["fix"].as_str() == Some("ha-proxy") {
+                            println!("Fix it in the web UI (the app's HTTPS card), which edits configuration.yaml and restarts HA.");
+                        }
+                    }
+                }
+                Ok(ExitCode::Ok)
+            }
+            .await
+        }
         AppCmd::History { app } => {
             async {
                 let list: Vec<HistoryEntry> = c.get(&format!("/v1/apps/{}/history", enc(app))).await?;

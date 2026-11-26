@@ -46,6 +46,17 @@ export function dateTime(unix: number): string {
  * the browser used to reach Hearth (so it works over Tailscale and from phones too). */
 export function openUrl(app: App, serverHostname: string): string | null {
 	if (!app.web_url) return null;
+	// Served over HTTPS by Hearth: same name the browser used for Hearth, the app's own port.
+	if (app.https_port) {
+		const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
+		let path = '/';
+		try {
+			path = new URL(app.web_url).pathname || '/';
+		} catch {
+			/* keep / */
+		}
+		return `https://${host}:${app.https_port}${path}`;
+	}
 	try {
 		const u = new URL(app.web_url);
 		const h = u.hostname.toLowerCase();

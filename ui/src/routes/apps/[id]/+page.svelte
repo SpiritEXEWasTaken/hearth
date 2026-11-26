@@ -130,7 +130,7 @@
 		{:else if tab === 'history' && managed}
 			<History {app} {canChange} {job} onchange={load} />
 		{:else}
-			<Overview {app} />
+			<Overview {app} {canChange} {job} onchange={load} />
 		{/if}
 	</div>
 {/if}

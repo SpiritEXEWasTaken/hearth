@@ -99,6 +99,7 @@ export interface App {
 	health: string | null;
 	memory_bytes: number | null;
 	web_url: string | null;
+	https_port?: number;
 	icon: string | null;
 	containers: Container[];
 	images: ImageVersion[];
@@ -240,4 +241,22 @@ export interface PackagePlan {
 export interface Setting {
 	value: string;
 	description: string;
+}
+
+export interface HttpsView {
+	enabled: boolean;
+	port: number | null;
+	target_port: number | null;
+	urls: string[];
+	running: boolean;
+	unavailable: string | null;
+	suggested_port: number | null;
+	home_assistant: boolean;
+}
+
+export interface HttpsTest {
+	ok: boolean;
+	status: number | null;
+	message: string;
+	fix: string | null;
 }

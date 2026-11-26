@@ -584,7 +584,15 @@ pub async fn set_running(
                 "stopping {app} (it stays stopped, also after reboots, until you start it)"
             ));
             compose(st, job, app, ComposeAction::Stop, &[]).await?;
-            let running: Vec<String> = running_services(st, app).await?;
+            // Docker can report a container as running for a moment after compose returns.
+            let mut running: Vec<String> = running_services(st, app).await?;
+            for _ in 0..30 {
+                if running.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                running = running_services(st, app).await?;
+            }
             if !running.is_empty() {
                 return Err(JobError::failed(format!("still running: {}", running.join(", "))));
             }

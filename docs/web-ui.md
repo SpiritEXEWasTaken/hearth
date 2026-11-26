@@ -22,8 +22,27 @@ name it asked for:
   before it expires. Download the CA at `https://<server>/ca.crt` (Settings → HTTPS shows how to install
   it on Android, Windows and iPhone, plus its fingerprint). `hearth web status` prints the same.
 
-Coming in M5c: HTTPS for every app (Hearth as the front door), Let's Encrypt with your own domain or
-DuckDNS (DNS-01, no open ports), and the Home Assistant proxy fix.
+## HTTPS for apps (M5c)
+
+Any app with a web page can get its own HTTPS address: the app's **HTTPS** card (Overview tab) or
+`hearth app https <app> --on [--port N]`. Hearth listens on that port (8443 and up by default) with
+the same certificates as the web UI and forwards to the app's own plain-HTTP port, websockets
+included. So Home Assistant becomes `https://jarvis.<tailnet>.ts.net:8443`.
+
+- Why ports and not `ha.jarvis…`: Tailscale certificates only cover the machine's own name. Subdomains
+  come with your own domain / DuckDNS (Let's Encrypt DNS-01), which is the next step (M5d).
+- The tiles and Open buttons use the HTTPS address once it's on.
+- **Test** asks the app the way the proxy does and explains the answer.
+- **Home Assistant** refuses proxied requests until it trusts the proxy. The card's **Fix it** adds
+  `use_x_forwarded_for` and `trusted_proxies` (127.0.0.1, ::1, Docker's 172.16.0.0/12) to
+  `configuration.yaml`, keeps the old file as `configuration.yaml.hearth-backup-<time>`, and
+  restarts HA. If the file already has an `http:` section, Hearth doesn't edit it and shows the lines
+  to add instead.
+- The proxy replaces any `X-Forwarded-For` the client sends with the address Hearth saw, and adds
+  `X-Forwarded-Proto: https` and `X-Forwarded-Host`.
+
+Still to come (M5d): Let's Encrypt with your own domain or DuckDNS (DNS-01, no open ports), with
+per-app subdomains on port 443.
 
 ## Accounts
 

@@ -153,6 +153,13 @@ pub enum Request {
     /// root or the Tailscale operator may use). Empty when Tailscale isn't running or has no
     /// HTTPS certificates enabled.
     TailscaleCerts,
+    /// Lets Home Assistant accept requests through Hearth's HTTPS proxy: adds `http:
+    /// use_x_forwarded_for` and `trusted_proxies` to the app's configuration.yaml (backup kept next
+    /// to it), only when the file has no `http:` section yet. Hearth apps only.
+    HaTrustProxy {
+        app: String,
+        dry_run: bool,
+    },
 
     // ----- M4: system updates (package manager, Flatpak) -----
     /// Distro, package backends and whether a reboot is needed.

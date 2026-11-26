@@ -87,6 +87,29 @@ test('updates tab checks the registry', async ({ page }) => {
 	await expect(page.getByText(/Last checked (just now|\d+ min ago)/)).toBeVisible({ timeout: 60_000 });
 });
 
+test('HTTPS for an app: turn on, test, open through the proxy, turn off', async ({ page, browser }) => {
+	await login(page);
+	await page.goto('/apps/whoami');
+	const card = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'HTTPS' }) });
+	await expect(card.getByRole('button', { name: 'Use HTTPS' })).toBeVisible();
+	await card.getByLabel('Port').fill('18443');
+	await card.getByRole('button', { name: 'Use HTTPS' }).click();
+	await expect(card.getByRole('status')).toContainText('Works');
+	const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
+	const p2 = await ctx.newPage();
+	await p2.goto('https://127.0.0.1:18443/some/path?x=1');
+	const body = (await p2.textContent('body')) ?? '';
+	expect(body).toContain('GET /some/path?x=1');
+	expect(body).toMatch(/X-Forwarded-Proto: https/i);
+	await ctx.close();
+	// The tile now opens the HTTPS address.
+	await page.goto('/');
+	await expect(page.getByRole('link', { name: /^Open Whoami/ })).toHaveAttribute('href', /^https:\/\/.*:18443\//);
+	await page.goto('/apps/whoami');
+	await card.getByRole('button', { name: 'Turn off' }).click();
+	await expect(card.getByRole('button', { name: 'Use HTTPS' })).toBeVisible();
+});
+
 test('users: add a read-only user who cannot change apps', async ({ page, browser }) => {
 	await login(page);
 	await page.goto('/settings');

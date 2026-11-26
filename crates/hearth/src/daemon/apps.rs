@@ -246,6 +246,10 @@ pub async fn list(state: &State) -> (Vec<AppDetail>, Vec<String>) {
         });
     }
     out.extend(super::kinds::list(state).await);
+    let https = state.with_db(|db| db.list_app_https()).unwrap_or_default();
+    for a in &mut out {
+        a.summary.https_port = https.iter().find(|h| h.app == a.summary.id).map(|h| h.port);
+    }
     (out, warnings)
 }
 
@@ -413,6 +417,7 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
             health: app_health(&healths),
             memory_bytes: total_mem,
             web_url,
+            https_port: None,
             icon,
             containers,
             images,

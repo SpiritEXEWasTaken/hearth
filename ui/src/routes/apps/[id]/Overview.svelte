@@ -1,7 +1,14 @@
 <script lang="ts">
 	import type { AppDetail } from '#lib/types.ts';
+	import type { JobRun } from '#lib/components/jobrun.svelte.ts';
 	import { bytes } from '#lib/format.ts';
-	let { app }: { app: AppDetail } = $props();
+	import HttpsCard from './HttpsCard.svelte';
+	let {
+		app,
+		canChange,
+		job,
+		onchange
+	}: { app: AppDetail; canChange: boolean; job: JobRun; onchange: () => void } = $props();
 
 	function shortDigest(d: string | null | undefined) {
 		return d ? d.replace(/^sha256:/, '').slice(0, 12) : '–';
@@ -52,6 +59,10 @@
 				{/if}
 			</dl>
 		</div>
+
+		{#if app.web_url}
+			<HttpsCard {app} {canChange} {job} {onchange} />
+		{/if}
 
 		{#if app.unit}
 			<div class="card stack">

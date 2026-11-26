@@ -250,6 +250,7 @@ pub async fn summary(st: &State, id: &str, d: &AppDefinition) -> AppDetail {
             state,
             health,
             web_url,
+            https_port: None,
             icon: d.icon.clone(),
             containers: Vec::new(),
             images: Vec::new(),

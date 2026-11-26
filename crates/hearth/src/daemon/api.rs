@@ -63,6 +63,7 @@ pub fn router(state: State) -> Router {
         .merge(super::system::routes())
         .merge(super::web_auth::routes())
         .merge(super::web::api_routes())
+        .merge(super::app_https::routes())
         .with_state(state)
 }
 

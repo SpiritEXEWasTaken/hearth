@@ -97,7 +97,24 @@ const MIGRATIONS: &[&str] = &[
         ip TEXT,
         user_agent TEXT
      );",
+    // 5: HTTPS ports for apps (Hearth proxies https://<server>:<port> to the app's own port)
+    "CREATE TABLE app_https (
+        app TEXT PRIMARY KEY,
+        port INTEGER NOT NULL UNIQUE,
+        target_port INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+     );",
 ];
+
+/// An app served over HTTPS by Hearth.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AppHttps {
+    pub app: String,
+    /// The HTTPS port Hearth listens on.
+    pub port: u16,
+    /// The app's own (plain HTTP) port on this machine.
+    pub target_port: u16,
+}
 
 /// A web UI account.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -390,6 +407,35 @@ impl Db {
     pub fn purge_expired_sessions(&self) -> rusqlite::Result<usize> {
         self.conn
             .execute("DELETE FROM sessions WHERE expires_at <= ?1", [now()])
+    }
+
+    // ----- app HTTPS ports -----
+
+    pub fn list_app_https(&self) -> rusqlite::Result<Vec<AppHttps>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT app, port, target_port FROM app_https ORDER BY port")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(AppHttps {
+                app: r.get(0)?,
+                port: r.get(1)?,
+                target_port: r.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn set_app_https(&self, h: &AppHttps) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_https (app, port, target_port, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(app) DO UPDATE SET port = ?2, target_port = ?3",
+            params![h.app, h.port, h.target_port, now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_app_https(&self, app: &str) -> rusqlite::Result<bool> {
+        Ok(self.conn.execute("DELETE FROM app_https WHERE app = ?1", [app])? > 0)
     }
 
     // ----- registry cache -----

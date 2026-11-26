@@ -1,29 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
-import { ADMIN } from './helpers';
+import { signIn } from './helpers';
 
 // Changes packages for real: only against a throwaway VM (HEARTH_SYSTEM_URL).
 test.skip(!process.env.HEARTH_SYSTEM_URL, 'HEARTH_SYSTEM_URL not set');
 test.describe.configure({ mode: 'serial' });
-
-async function signIn(page: Page) {
-	await page.goto('/');
-	const welcome = page.getByRole('heading', { name: 'Welcome to Hearth' });
-	const signin = page.getByRole('button', { name: 'Sign in' });
-	const home = page.getByRole('heading', { name: 'Apps', exact: true });
-	await expect(welcome.or(signin).or(home)).toBeVisible();
-	if (await welcome.isVisible()) {
-		await page.getByLabel('Setup code').fill(process.env.HEARTH_SYSTEM_SETUP_CODE ?? '');
-		await page.getByLabel('Username').fill(ADMIN.username);
-		await page.locator('input[name=password]').fill(ADMIN.password);
-		await page.getByLabel('Password again').fill(ADMIN.password);
-		await page.getByRole('button', { name: 'Create admin account' }).click();
-	} else if (await signin.isVisible()) {
-		await page.getByLabel('Username').fill(ADMIN.username);
-		await page.getByLabel('Password').fill(ADMIN.password);
-		await signin.click();
-	}
-	await expect(home).toBeVisible();
-}
 
 async function closeJob(page: Page) {
 	await expect(page.getByRole('status').filter({ hasText: /Done\.|didn't work|failed/i })).toHaveText('Done.', { timeout: 600_000 });

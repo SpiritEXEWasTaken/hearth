@@ -31,9 +31,8 @@ struct Ui;
 const MAX_CONNECTIONS: usize = 256;
 const ICON_MAX_BYTES: usize = 512 * 1024;
 
-/// Starts the HTTPS listeners. Failing to bind (port taken, no permission) is logged, and the
-/// daemon keeps serving the CLI on its socket.
-pub async fn serve(state: State, listen: Vec<SocketAddr>) {
+/// The TLS setup shared by the web UI and the app HTTPS ports: certificates picked by SNI.
+pub fn tls_acceptor(state: &State) -> Option<tokio_rustls::TlsAcceptor> {
     let config = match rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
     ))
@@ -42,14 +41,87 @@ pub async fn serve(state: State, listen: Vec<SocketAddr>) {
         Ok(b) => b.with_no_client_auth().with_cert_resolver(state.certs.clone()),
         Err(e) => {
             tracing::error!("TLS setup failed: {e}");
-            return;
+            return None;
         }
     };
     let mut config = config;
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    Some(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
+}
+
+/// What a TLS listener does with each request.
+pub type Handler = Arc<
+    dyn Fn(Peer, hyper::Request<hyper::body::Incoming>) -> futures_util::future::BoxFuture<'static, Response>
+        + Send
+        + Sync,
+>;
+
+/// Accepts TLS connections on `listener` and serves them with `handler` (HTTP/1.1, upgrades
+/// allowed), at most `limit` connections at once. Runs until the task is aborted.
+pub async fn accept_loop(
+    listener: TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    limit: Arc<tokio::sync::Semaphore>,
+    handler: Handler,
+) {
+    loop {
+        let (tcp, remote) = match listener.accept().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("accept: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let Ok(permit) = limit.clone().try_acquire_owned() else {
+            continue; // too many connections: drop this one
+        };
+        let (acceptor, handler) = (acceptor.clone(), handler.clone());
+        tokio::spawn(async move {
+            let _permit = permit;
+            let _ = tcp.set_nodelay(true);
+            let tls = match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await {
+                Ok(Ok(t)) => t,
+                _ => return,
+            };
+            let peer = Peer {
+                uid: None,
+                ip: Some(remote.ip().to_canonical()),
+            };
+            let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                let fut = handler(peer, req);
+                async move { Ok::<_, std::convert::Infallible>(fut.await) }
+            });
+            let conn = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(Duration::from_secs(30))
+                .serve_connection(TokioIo::new(tls), svc)
+                .with_upgrades();
+            if let Err(e) = conn.await {
+                tracing::debug!("connection: {e}");
+            }
+        });
+    }
+}
+
+/// Starts the HTTPS listeners. Failing to bind (port taken, no permission) is logged, and the
+/// daemon keeps serving the CLI on its socket.
+pub async fn serve(state: State, listen: Vec<SocketAddr>) {
+    let Some(acceptor) = tls_acceptor(&state) else {
+        return;
+    };
     let app = router(state);
     let limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let handler: Handler = Arc::new(move |peer, mut req| {
+        let app = app.clone();
+        Box::pin(async move {
+            req.extensions_mut().insert(ConnectInfo(peer));
+            match app.oneshot(req.map(axum::body::Body::new)).await {
+                Ok(r) => r,
+                Err(e) => match e {},
+            }
+        })
+    });
 
     let mut bound = 0;
     for addr in listen {
@@ -62,49 +134,12 @@ pub async fn serve(state: State, listen: Vec<SocketAddr>) {
         };
         bound += 1;
         tracing::info!(%addr, "web UI listening (HTTPS)");
-        let (acceptor, app, limit) = (acceptor.clone(), app.clone(), limit.clone());
-        tokio::spawn(async move {
-            loop {
-                let (tcp, remote) = match listener.accept().await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::debug!("accept: {e}");
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-                };
-                let Ok(permit) = limit.clone().try_acquire_owned() else {
-                    continue; // too many connections: drop this one
-                };
-                let (acceptor, app) = (acceptor.clone(), app.clone());
-                tokio::spawn(async move {
-                    let _permit = permit;
-                    let _ = tcp.set_nodelay(true);
-                    let tls = match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await
-                    {
-                        Ok(Ok(t)) => t,
-                        _ => return,
-                    };
-                    let peer = Peer {
-                        uid: None,
-                        ip: Some(remote.ip().to_canonical()),
-                    };
-                    let svc =
-                        hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
-                            req.extensions_mut().insert(ConnectInfo(peer));
-                            app.clone().oneshot(req.map(axum::body::Body::new))
-                        });
-                    let conn = hyper::server::conn::http1::Builder::new()
-                        .timer(TokioTimer::new())
-                        .header_read_timeout(Duration::from_secs(30))
-                        .serve_connection(TokioIo::new(tls), svc)
-                        .with_upgrades();
-                    if let Err(e) = conn.await {
-                        tracing::debug!("connection: {e}");
-                    }
-                });
-            }
-        });
+        tokio::spawn(accept_loop(
+            listener,
+            acceptor.clone(),
+            limit.clone(),
+            handler.clone(),
+        ));
     }
     if bound == 0 {
         tracing::warn!("the web UI isn't reachable; the CLI still works");
@@ -112,7 +147,7 @@ pub async fn serve(state: State, listen: Vec<SocketAddr>) {
 }
 
 /// Binds with SO_REUSEADDR (quick restarts) and, for `[::]`, dual-stack where the system allows.
-fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
+pub fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = if addr.is_ipv6() {
         tokio::net::TcpSocket::new_v6()?
     } else {

@@ -184,6 +184,9 @@ fn log_request(req: &Request, uid: u32) {
             tracing::info!(uid, app, ?action, ?services, "docker compose")
         }
         Request::RemoveAppDir { app } => tracing::info!(uid, app, "remove app folder"),
+        Request::HaTrustProxy { app, dry_run: false } => {
+            tracing::info!(uid, app, "trust Hearth's proxy in HA")
+        }
         Request::TagImage { source, repo, tag } => tracing::info!(uid, source, repo, tag, "tag image"),
         Request::RemoveImage { name } => tracing::info!(uid, name, "remove image"),
         Request::DeleteAppData { app, volumes, paths } => {
@@ -284,6 +287,9 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         Request::BackupCasaos => helper_apps::backup_casaos(cfg, out).await,
         Request::DumpPostgres { app, service } => helper_apps::dump_postgres(cfg, &app, &service, out).await,
         Request::CasaosApply { app } => helper_apps::casaos_apply(cfg, &app, out).await,
+        Request::HaTrustProxy { app, dry_run } => {
+            crate::helper_apps::ha_trust_proxy(cfg, &app, dry_run).await
+        }
         Request::TailscaleCerts => crate::helper_tls::tailscale_certs()
             .await
             .map(|c| serde_json::to_value(c).unwrap_or(Value::Null)),

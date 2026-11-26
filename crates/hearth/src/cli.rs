@@ -306,6 +306,23 @@ pub enum AppsCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum AppCmd {
+    /// Serve the app over HTTPS on its own port (https://<server>:<port>), or show its HTTPS
+    /// addresses. Hearth forwards to the app's plain-HTTP port.
+    Https {
+        app: String,
+        /// Turn HTTPS on.
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        /// Turn HTTPS off.
+        #[arg(long)]
+        off: bool,
+        /// The HTTPS port (default: the first free one from 8443).
+        #[arg(long, requires = "on")]
+        port: Option<u16>,
+        /// Check that the app answers through Hearth's proxy.
+        #[arg(long)]
+        test: bool,
+    },
     /// Change a service/native/link/package app's title, icon, web address or dashboard placement.
     Set {
         app: String,
