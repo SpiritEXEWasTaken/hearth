@@ -193,6 +193,9 @@ fn log_request(req: &Request, uid: u32) {
             tracing::info!(uid, app, ?volumes, ?paths, "delete app data")
         }
         Request::CreateBackup { app, .. } => tracing::info!(uid, app, "create backup"),
+        Request::PrepareAppData { app, dirs, .. } => {
+            tracing::info!(uid, app, ?dirs, "prepare app data folders")
+        }
         Request::RestoreBackup { app, file } => tracing::info!(uid, app, file, "restore backup"),
         Request::PruneBackups { app, keep } => tracing::info!(uid, app, keep, "prune backups"),
         Request::BackupCasaos => tracing::info!(uid, "back up CasaOS"),
@@ -278,6 +281,13 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         Request::DeleteAppData { app, volumes, paths } => {
             helper_apps::delete_data(cfg, &app, &volumes, &paths, out).await
         }
+        Request::PrepareAppData {
+            app,
+            dirs,
+            uid: owner_uid,
+            gid,
+        } => helper_apps::prepare_data(cfg, &app, &dirs, owner_uid, gid),
+        Request::HostFacts { paths } => helper_apps::host_facts(cfg, &paths).await,
         Request::CreateBackup { app, exclude_targets } => {
             helper_apps::create_backup(cfg, &app, &exclude_targets, out).await
         }

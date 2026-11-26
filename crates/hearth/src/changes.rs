@@ -438,6 +438,7 @@ pub async fn run(cmd: &Command, g: &GlobalArgs) -> Option<Result<ExitCode, Error
         Command::System(cmd) => system_cli::run(&c, g, cmd).await,
         Command::Package(cmd) => system_cli::package(&c, g, cmd).await,
         Command::Add(cmd) => system_cli::add(&c, g, cmd).await,
+        Command::Store(cmd) => crate::store_cli::run(&c, g, cmd).await,
         _ => return None,
     })
 }

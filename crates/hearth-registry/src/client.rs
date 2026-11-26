@@ -56,6 +56,8 @@ pub struct RemoteImage {
     pub created: Option<String>,
     /// Platforms the image is published for (`linux/amd64`, …).
     pub platforms: Vec<String>,
+    /// Compressed download size for this platform (sum of the layers), in bytes.
+    pub size: Option<u64>,
 }
 
 pub struct RegistryClient {
@@ -71,6 +73,12 @@ struct Manifest {
     media_type: Option<String>,
     manifests: Option<Vec<IndexEntry>>,
     config: Option<Descriptor>,
+    layers: Option<Vec<Layer>>,
+}
+
+#[derive(Deserialize)]
+struct Layer {
+    size: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +101,8 @@ struct Descriptor {
 #[derive(Deserialize)]
 struct ImageConfig {
     created: Option<String>,
+    architecture: Option<String>,
+    os: Option<String>,
     config: Option<ImageConfigInner>,
 }
 
@@ -203,6 +213,10 @@ impl RegistryClient {
             }
         };
 
+        let size = manifest
+            .as_ref()
+            .and_then(|m| m.layers.as_ref())
+            .map(|l| l.iter().filter_map(|x| x.size).sum());
         let (version, created) = match manifest.and_then(|m| m.config) {
             Some(cfg) => {
                 let url = format!("{}/v2/{}/blobs/{}", self.base(r), r.repository, cfg.digest);
@@ -211,6 +225,12 @@ impl RegistryClient {
                     .await?
                     .json()
                     .await?;
+                if platforms.is_empty()
+                    && let (Some(os), Some(arch)) = (&c.os, &c.architecture)
+                {
+                    // A single-platform image: its config says which platform it is.
+                    platforms.push(format!("{os}/{arch}"));
+                }
                 let labels = c.config.and_then(|c| c.labels).unwrap_or_default();
                 (version_from_labels(&labels), c.created)
             }
@@ -222,6 +242,7 @@ impl RegistryClient {
             version,
             created,
             platforms,
+            size,
         })
     }
 

@@ -1,0 +1,37 @@
+[package]
+name = "hearth-store"
+description = "Hearth's app store: entry format, install options, variant merge, checks, signed catalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# The `hearth-store` tool used by the store repository's CI (lint, registry checks, build, sign, site).
+tool = ["dep:clap", "dep:tokio", "dep:minisign", "dep:hearth-registry"]
+
+[[bin]]
+name = "hearth-store"
+path = "src/bin/hearth-store.rs"
+required-features = ["tool"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+sha2.workspace = true
+hex.workspace = true
+minisign-verify = "0.2"
+clap = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+hearth-registry = { workspace = true, optional = true }
+minisign = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

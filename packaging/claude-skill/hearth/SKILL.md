@@ -136,6 +136,21 @@ hearth app set <app> [--title T] [--port P] [--url U] [--dashboard|--no-dashboar
 - Never add a native app that runs as root, and never stop a service the person relies on (SSH,
   Tailscale, Samba, `claude-remote-control`), without asking first.
 
+## App store
+
+See `docs/store.md`. Store apps install with host checks; always look at the plan first.
+
+```sh
+hearth store list [words] --json
+hearth store show <app> --json                     # entry, options, and checks for this server
+hearth store install <app> [--option id=value] [--port VAR=N] --dry-run --json
+hearth store install <app> ... --yes               # only after the person agreed to the plan
+hearth store credentials <app>                     # generated admin passwords (don't paste them into chat unasked)
+```
+
+- `plan.ok: false` means a check failed (`checks[].level == "error"`): explain it, don't work around it.
+- Ask before installing anything heavy (RAM or disk warnings) or anything that takes port 53.
+
 ## Web UI accounts
 
 The web UI (`https://<server>/`) has its own accounts. Read-only: `hearth web status` (addresses,

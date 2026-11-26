@@ -113,6 +113,20 @@ pub enum Request {
         volumes: Vec<String>,
         paths: Vec<String>,
     },
+    /// Read-only facts for store installs: which of `paths` exist (`dir`, `file` or `missing`),
+    /// free space where Docker keeps images, and whether Docker has the Nvidia runtime.
+    HostFacts {
+        paths: Vec<String>,
+    },
+    /// Creates the app's data folder (`<data root>/<app>`) and the given folders below it
+    /// (relative paths only), owned by root or by `uid:gid`. Existing folders are left alone.
+    /// Answers `{"root": "<data root>/<app>"}`.
+    PrepareAppData {
+        app: String,
+        dirs: Vec<DataDirRequest>,
+        uid: u32,
+        gid: u32,
+    },
     /// Writes a backup archive of the app (files, named volumes, bind-mounted data).
     CreateBackup {
         app: String,
@@ -484,4 +498,13 @@ pub struct TailscaleCert {
     pub domain: String,
     pub cert_pem: String,
     pub key_pem: String,
+}
+
+/// One folder for [`Request::PrepareAppData`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataDirRequest {
+    /// Relative to the app's data folder.
+    pub path: String,
+    /// Owned by the app user (`uid:gid`) instead of root.
+    pub user: bool,
 }

@@ -65,6 +65,7 @@
 	const nav = [
 		{ href: '/', label: 'Home', icon: 'home' },
 		{ href: '/apps', label: 'Apps', icon: 'apps' },
+		{ href: '/store', label: 'Store', icon: 'store' },
 		{ href: '/system', label: 'System', icon: 'shield' },
 		{ href: '/settings', label: 'Settings', icon: 'settings' }
 	];
@@ -321,7 +322,7 @@
 		}
 		.bottombar {
 			display: grid;
-			grid-template-columns: repeat(4, 1fr);
+			grid-template-columns: repeat(5, 1fr);
 			position: fixed;
 			left: 0;
 			right: 0;

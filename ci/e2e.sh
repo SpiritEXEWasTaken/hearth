@@ -6,9 +6,9 @@ BIN=$(realpath "$1")
 T=$(mktemp -d)
 mkdir -p "$T/lib" "$T/backups" "$T/state"
 cleanup() {
-    kill "${DP:-}" "${HP:-}" 2>/dev/null || true
+    kill "${DP:-}" "${HP:-}" "${SP:-}" 2>/dev/null || true
     docker rm -f e2e-pebble e2e-challtestsrv >/dev/null 2>&1 || true
-    for p in whoami ticker; do docker compose -p "$p" down -v >/dev/null 2>&1 || true; done
+    for p in whoami whoami-2 ticker; do docker compose -p "$p" down -v >/dev/null 2>&1 || true; done
     echo "--- daemon log"; tail -50 "$T/daemon.log" || true
     echo "--- helper log"; tail -30 "$T/helper.log" || true
 }
@@ -24,6 +24,11 @@ if docker run -d --rm --name e2e-challtestsrv --network host \
     export HEARTH_ACME_DIRECTORY=https://localhost:14000/dir HEARTH_ACME_ROOT="$T/pebble.pem"
     export HEARTH_DNS_TESTSRV=http://localhost:8055 HEARTH_PEBBLE=1
 fi
+# The test store catalog (ci/store-fixture), signed with a throwaway test key.
+python3 -m http.server 18765 --bind 127.0.0.1 -d "$(dirname "$0")/store-fixture/dist" > "$T/store.log" 2>&1 &
+SP=$!
+export HEARTH_STORE_URL=http://127.0.0.1:18765/
+export HEARTH_STORE_PUBKEY=RWQQK7PgQ9Jp/fMFkHovT+/O5InGXDZ7Msod1SH2y7kBjaiR+3FEHD7y
 "$BIN" helper --helper-socket "$T/helper.sock" --daemon-user "$(id -un)" --lib-dir "$T/lib" --backups-dir "$T/backups" > "$T/helper.log" 2>&1 &
 HP=$!
 sleep 1

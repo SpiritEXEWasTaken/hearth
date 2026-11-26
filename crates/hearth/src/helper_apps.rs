@@ -550,6 +550,85 @@ fn is_under(path: &Path, root: &Path) -> bool {
     clean && path.starts_with(root)
 }
 
+/// Facts the daemon can't see from its sandbox (see `Request::HostFacts`).
+pub async fn host_facts(cfg: &HelperConfig, paths: &[String]) -> Result<Value, String> {
+    let mut kinds = serde_json::Map::new();
+    for p in paths.iter().take(50) {
+        let kind = match fs::metadata(p) {
+            Ok(m) if m.is_dir() => "dir",
+            Ok(_) => "file",
+            Err(_) => "missing",
+        };
+        kinds.insert(p.clone(), json!(kind));
+    }
+    let info = match docker(cfg, http::Method::GET, "/info").await {
+        Ok(r) => serde_json::from_slice::<Value>(&r.body).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    let root = info
+        .get("DockerRootDir")
+        .and_then(Value::as_str)
+        .unwrap_or("/var/lib/docker")
+        .to_string();
+    let nvidia = info
+        .get("Runtimes")
+        .and_then(Value::as_object)
+        .is_some_and(|r| r.contains_key("nvidia"));
+    let free_mb = rustix::fs::statvfs(root.as_str())
+        .ok()
+        .map(|s| s.f_bavail.saturating_mul(s.f_frsize) / (1024 * 1024));
+    Ok(json!({ "paths": kinds, "docker_root": root, "docker_free_mb": free_mb, "nvidia_runtime": nvidia }))
+}
+
+/// Creates `<data root>/<app>` and folders below it for a new app.
+pub fn prepare_data(
+    cfg: &HelperConfig,
+    app: &str,
+    dirs: &[proto::DataDirRequest],
+    uid: u32,
+    gid: u32,
+) -> Result<Value, String> {
+    check_app(app)?;
+    if uid != 0 && uid < 1000 || gid != 0 && gid < 100 {
+        return Err(format!("refusing to give folders to system account {uid}:{gid}"));
+    }
+    let root = cfg.data_dir.join(app);
+    let mut created = Vec::new();
+    let mut make = |path: &Path, user: bool| -> Result<(), String> {
+        if path.exists() {
+            return Ok(());
+        }
+        fs::create_dir_all(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        if user {
+            rustix::fs::chown(
+                path,
+                Some(rustix::fs::Uid::from_raw(uid)),
+                Some(rustix::fs::Gid::from_raw(gid)),
+            )
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        created.push(path.display().to_string());
+        Ok(())
+    };
+    make(&root, false)?;
+    for d in dirs {
+        let rel = Path::new(&d.path);
+        let ok = !d.path.is_empty() && rel.components().all(|c| matches!(c, Component::Normal(_)));
+        if !ok {
+            return Err(format!("'{}' must be a plain relative path", d.path));
+        }
+        // Parents are created root-owned; only the folder itself gets the user.
+        if let Some(parent) = rel.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            make(&root.join(parent), false)?;
+        }
+        make(&root.join(rel), d.user)?;
+    }
+    Ok(json!({ "root": root.display().to_string(), "created": created }))
+}
+
 pub async fn delete_data(
     cfg: &HelperConfig,
     app: &str,

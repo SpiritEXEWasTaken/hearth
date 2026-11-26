@@ -15,6 +15,8 @@ uses under 30 MB of RAM when idle.
 > Hearth runs, links and packages can be apps; only those with a web page go on the main app list
 > ([docs/app-kinds.md](docs/app-kinds.md)). The web UI runs on port 443 with a real Tailscale certificate
 > or Hearth's own one, with an admin account created on first run ([docs/web-ui.md](docs/web-ui.md)).
+> Apps can be installed from Hearth's own signed app store, with install options (GPU, editions) and host
+> checks (CPU type, RAM, disk, ports, folders) instead of duplicate entries ([docs/store.md](docs/store.md)).
 
 ## Goals
 

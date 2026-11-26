@@ -1,0 +1,24 @@
+
+:root{--bg:#faf8f5;--fg:#1d1b19;--muted:#6b645c;--card:#fff;--line:#e7e1d9;--accent:#c2410c;--chip:#f3ede6}
+@media(prefers-color-scheme:dark){:root{--bg:#161412;--fg:#eee9e3;--muted:#a59d94;--card:#201d1a;--line:#36312c;--accent:#fb923c;--chip:#2b2723}}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+a{color:var(--accent)}header{padding:24px 20px 8px;max-width:1100px;margin:auto}
+header h1{margin:0;font-size:26px}header p{margin:4px 0 0;color:var(--muted)}
+main{max-width:1100px;margin:auto;padding:12px 20px 40px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 16px}
+.bar input{flex:1 1 240px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);font-size:16px}
+.chip{border:1px solid var(--line);background:var(--chip);color:var(--fg);padding:6px 12px;border-radius:999px;cursor:pointer;font-size:14px}
+.chip[aria-pressed=true]{background:var(--accent);color:#fff;border-color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.card{display:flex;gap:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--card);text-decoration:none;color:inherit}
+.card:hover{border-color:var(--accent)}.card img{width:48px;height:48px;object-fit:contain;flex:none}
+.card h3{margin:0;font-size:17px}.card p{margin:2px 0 6px;color:var(--muted);font-size:14px}
+.badges{display:flex;flex-wrap:wrap;gap:4px}.b{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+.b.https,.b.gpu{color:var(--accent)}
+.shots{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:8px}
+.shots figure{margin:0;flex:0 0 min(90%,640px);scroll-snap-align:start}
+.shots img{width:100%;border:1px solid var(--line);border-radius:10px}.shots figcaption{font-size:13px;color:var(--muted)}
+.notice{border-left:4px solid var(--accent);background:var(--chip);padding:10px 14px;border-radius:6px;margin:14px 0}
+.top{display:flex;gap:16px;align-items:center}.top img{width:72px;height:72px}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px}dt{color:var(--muted)}dd{margin:0}
+footer{max-width:1100px;margin:auto;padding:20px;color:var(--muted);font-size:14px}

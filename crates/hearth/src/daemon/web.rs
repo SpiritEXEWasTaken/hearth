@@ -255,8 +255,9 @@ async fn static_file(uri: axum::http::Uri) -> Response {
     let path = if path.is_empty() { "index.html" } else { path };
     let (file, name) = match Ui::get(path) {
         Some(f) => (f, path),
-        // Pages of the single-page app (e.g. /apps/jellyfin) all load index.html.
-        None if !path.rsplit('/').next().unwrap_or("").contains('.') => match Ui::get("index.html") {
+        // Pages of the single-page app (e.g. /apps/jellyfin, /store/org.jellyfin.jellyfin) all
+        // load index.html; missing assets (scripts, styles, images) are a real 404.
+        None if !looks_like_asset(path) => match Ui::get("index.html") {
             Some(f) => (f, "index.html"),
             None => return no_ui(),
         },
@@ -407,4 +408,50 @@ async fn icon_bytes(state: &State, url: &str) -> Result<(String, Vec<u8>), Strin
     let _ = std::fs::write(&data_path, &bytes);
     let _ = std::fs::write(&type_path, &ctype);
     Ok((ctype, bytes))
+}
+
+/// A path that names a static file (a missing one is a 404, not a page of the app).
+fn looks_like_asset(path: &str) -> bool {
+    const EXT: &[&str] = &[
+        "js",
+        "mjs",
+        "css",
+        "map",
+        "png",
+        "svg",
+        "ico",
+        "jpg",
+        "jpeg",
+        "webp",
+        "gif",
+        "woff",
+        "woff2",
+        "ttf",
+        "json",
+        "txt",
+        "webmanifest",
+        "html",
+        "xml",
+        "wasm",
+    ];
+    path.starts_with("_app/")
+        || path
+            .rsplit('/')
+            .next()
+            .and_then(|last| last.rsplit_once('.'))
+            .is_some_and(|(_, ext)| EXT.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::looks_like_asset;
+
+    #[test]
+    fn store_ids_are_pages() {
+        assert!(!looks_like_asset("store/org.jellyfin.jellyfin"));
+        assert!(!looks_like_asset("apps/jellyfin"));
+        assert!(looks_like_asset("_app/immutable/x"));
+        assert!(looks_like_asset("favicon.svg"));
+        assert!(looks_like_asset("robots.txt"));
+    }
 }

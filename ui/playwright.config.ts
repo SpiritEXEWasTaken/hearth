@@ -20,7 +20,7 @@ export default defineConfig({
 		{ name: 'setup', testMatch: /01-setup\.spec\.ts/ },
 		{
 			name: 'desktop',
-			testMatch: /0[26]-.*\.spec\.ts/,
+			testMatch: /0[267]-.*\.spec\.ts/,
 			dependencies: ['setup'],
 			use: {
 				viewport: { width: 1280, height: 860 },

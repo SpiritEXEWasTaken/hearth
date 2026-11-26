@@ -2,6 +2,7 @@
 
 mod api;
 mod api_changes;
+mod api_store;
 mod app_https;
 pub mod apps;
 mod auth;
@@ -15,6 +16,7 @@ mod kinds;
 mod migrate;
 mod proxy;
 pub mod stats;
+pub mod store;
 mod system;
 mod tls;
 mod versions;
@@ -73,6 +75,7 @@ pub struct State {
     certs: Arc<tls::CertStore>,
     web: Arc<web_auth::WebAuth>,
     proxies: Arc<proxy::Proxies>,
+    store: Arc<store::Store>,
     /// When the domain was last read, and its base name.
     domain_cache: Arc<Mutex<(Option<std::time::Instant>, Option<String>)>>,
     state_dir: PathBuf,
@@ -143,6 +146,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         certs: Arc::new(tls::CertStore::new(&cfg.state_dir, &hostname)),
         web: Arc::new(web_auth::WebAuth::new(&cfg.state_dir)),
         proxies: Arc::new(proxy::Proxies::default()),
+        store: Arc::new(store::Store::new(&cfg.state_dir)),
         domain_cache: Arc::new(Mutex::new((None, None))),
         state_dir: cfg.state_dir.clone(),
         hostname,
@@ -185,6 +189,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
     ));
 
     tokio::spawn(system::scheduler(state.clone()));
+    store::spawn_refresher(state.clone());
 
     if !cfg.web_listen.is_empty() {
         let users = state.with_db(|db| db.count_users()).unwrap_or(0);

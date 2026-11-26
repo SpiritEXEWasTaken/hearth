@@ -123,6 +123,9 @@ pub enum Command {
     /// or an installed package. Apps without a web page stay off the main app list.
     #[command(subcommand)]
     Add(AddCmd),
+    /// The app store: browse, see what an app needs, install with options.
+    #[command(subcommand)]
+    Store(StoreCmd),
     /// Move apps from another manager to Hearth.
     #[command(subcommand)]
     Migrate(MigrateCmd),
@@ -138,6 +141,51 @@ pub enum Command {
     /// Run the privileged helper (used by the systemd unit).
     #[command(hide = true)]
     Helper(HelperArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StoreCmd {
+    /// List store apps, optionally matching words or a category.
+    List {
+        /// Words to search for in names, summaries and tags.
+        query: Vec<String>,
+        /// Only this category (e.g. media, network).
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// An app's details, and what it needs compared with this server (host checks).
+    Show {
+        /// Store id, or the app's name (e.g. jellyfin).
+        app: String,
+    },
+    /// Download the latest catalog now (it's also refreshed twice a day).
+    Refresh,
+    /// Install an app from the store. Shows the plan and host checks first.
+    Install {
+        /// Store id, or the app's name (e.g. jellyfin).
+        app: String,
+        /// The app's name on this server (default: the store's, e.g. jellyfin).
+        #[arg(long)]
+        name: Option<String>,
+        /// An install option, e.g. --option gpu=vaapi. Repeat for several; see `hearth store show`.
+        #[arg(long = "option", value_name = "ID=VALUE")]
+        options: Vec<String>,
+        /// A host port, e.g. --port WEB_PORT=8100.
+        #[arg(long = "port", value_name = "VAR=PORT")]
+        ports: Vec<String>,
+        /// Turn on HTTPS for the app after installing (default: only when it needs it).
+        #[arg(long, conflicts_with = "no_https")]
+        https: bool,
+        /// Don't turn on HTTPS, even if the app needs it.
+        #[arg(long)]
+        no_https: bool,
+    },
+    /// Link an installed app to its store entry (shows the entry's notes; nothing else changes).
+    Link { app: String, entry: String },
+    /// Remove a link made with `hearth store link`.
+    Unlink { app: String },
+    /// Sign-in details Hearth generated for a store app (e.g. an admin password).
+    Credentials { app: String },
 }
 
 #[derive(Debug, Subcommand)]

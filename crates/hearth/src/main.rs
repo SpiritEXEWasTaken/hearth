@@ -11,6 +11,7 @@ mod helper_apps;
 mod helper_tls;
 mod helper_units;
 mod render;
+mod store_cli;
 mod system_cli;
 mod sysupdate;
 mod unixhttp;

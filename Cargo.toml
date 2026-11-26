@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hearth-core", "crates/hearth-registry", "crates/hearth-casaos", "crates/hearth"]
+members = ["crates/hearth-core", "crates/hearth-registry", "crates/hearth-casaos", "crates/hearth-store", "crates/hearth"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ publish = false
 hearth-core = { path = "crates/hearth-core" }
 hearth-registry = { path = "crates/hearth-registry" }
 hearth-casaos = { path = "crates/hearth-casaos" }
+hearth-store = { path = "crates/hearth-store" }
 
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

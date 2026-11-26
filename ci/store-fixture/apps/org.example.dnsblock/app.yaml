@@ -1,0 +1,15 @@
+id: org.example.dnsblock
+name: Port Clash
+summary: Needs a fixed port that the test app already uses (store test entry)
+description: Can't be installed next to the Whoami test app.
+category: network
+upstream: {website: "https://example.org/dnsblock", source: "https://example.org/dnsblock/src"}
+license: MIT
+icon: icon.svg
+screenshots:
+  - {file: screenshots/1.png, caption: Nothing to see, source: own}
+app_name: portclash
+web: {service: web, port_env: WEB_PORT}
+requirements: {ram_mb: 16, data_mb: 1, architectures: [amd64]}
+ports:
+  - {env: WEB_PORT, port: 18081, label: Fixed port, movable: false}

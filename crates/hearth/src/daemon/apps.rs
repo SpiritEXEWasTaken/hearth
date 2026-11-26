@@ -352,6 +352,7 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
     let mut icon = None;
     let mut web_url = None;
     let mut extra = (Vec::new(), Vec::new(), None);
+    let mut hide_from_dashboard = false;
     if g.managed_by == ManagedBy::Casaos && g.endpoint == DockerEndpoint::Root {
         match state.helper.casaos_app(&g.id).await {
             Ok(text) => match ComposeFile::parse(&text, &g.id) {
@@ -392,6 +393,12 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
                 title = t.to_string();
             }
             icon = xh.get("icon").and_then(|t| t.as_str()).map(str::to_string);
+            extra.2 = xh
+                .get("store")
+                .and_then(|s| s.get("id"))
+                .and_then(|t| t.as_str())
+                .map(str::to_string);
+            hide_from_dashboard = xh.get("dashboard").and_then(|d| d.as_bool()) == Some(false);
             if let Some(w) = super::engine::web_of(text) {
                 let scheme = xh
                     .get("web")
@@ -409,7 +416,7 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
             id: g.id.clone(),
             title,
             kind: hearth_core::model::AppKind::Compose,
-            dashboard: web_url.is_some(),
+            dashboard: web_url.is_some() && !hide_from_dashboard,
             managed_by: g.managed_by,
             endpoint: Some(g.endpoint.clone()),
             unit: None,

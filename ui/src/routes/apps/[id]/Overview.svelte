@@ -3,6 +3,8 @@
 	import type { JobRun } from '#lib/components/jobrun.svelte.ts';
 	import { bytes } from '#lib/format.ts';
 	import HttpsCard from './HttpsCard.svelte';
+	import StoreCard from './StoreCard.svelte';
+	import { page } from '$app/state';
 	let {
 		app,
 		canChange,
@@ -59,6 +61,10 @@
 				{/if}
 			</dl>
 		</div>
+
+		{#if app.kind === 'compose'}
+			<StoreCard {app} justInstalled={page.url.searchParams.has('installed')} />
+		{/if}
 
 		{#if app.web_url}
 			<HttpsCard {app} {canChange} {job} {onchange} />

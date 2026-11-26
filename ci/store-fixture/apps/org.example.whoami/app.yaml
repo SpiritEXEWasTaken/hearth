@@ -1,0 +1,33 @@
+id: org.example.whoami
+name: Whoami
+summary: A tiny web page that shows the request (store test entry)
+description: |
+  Answers every request with what it received. Used by Hearth's tests.
+
+  Second paragraph.
+category: other
+upstream: {website: "https://github.com/traefik/whoami", source: "https://github.com/traefik/whoami"}
+license: Apache-2.0
+icon: icon.svg
+screenshots:
+  - {file: screenshots/1.png, caption: The test page, source: own}
+app_name: whoami
+web: {service: web, port_env: WEB_PORT, https: recommended}
+requirements: {ram_mb: 16, data_mb: 1, architectures: [amd64, arm64]}
+notice: No test data is included.
+ports:
+  - {env: WEB_PORT, port: 18082, label: Web page}
+env:
+  SECRET_WORD: {generate: password, show_as: Secret word}
+options:
+  - id: greeting
+    kind: choice
+    label: Greeting
+    default: hello
+    choices:
+      - {id: hello, label: Hello}
+      - {id: verbose, label: Verbose logging, variants: [verbose]}
+data_dirs:
+  - {path: data}
+after_install:
+  - Open the page to see your request.

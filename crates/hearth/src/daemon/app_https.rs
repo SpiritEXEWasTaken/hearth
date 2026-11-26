@@ -223,6 +223,40 @@ fn suggest(st: &State) -> Option<u16> {
     (SUGGEST_FROM..=SUGGEST_TO).find(|p| !used.contains(p) && port_free(*p))
 }
 
+/// Turns HTTPS on for an app with the suggested port (and a subdomain named after the app when
+/// your own domain is set up). Used after store installs of apps that need HTTPS. Returns the
+/// app's HTTPS addresses.
+pub async fn turn_on(st: &State, id: &str, actor: &str) -> Result<Vec<String>, String> {
+    let app = find(st, id).await.map_err(|e| e.to_string())?;
+    let web = app
+        .summary
+        .web_url
+        .as_deref()
+        .ok_or_else(|| "this app has no web page".to_string())?;
+    let target = http_port(web)?;
+    let existing = st.with_db(|db| db.list_app_https()).map_err(|e| e.to_string())?;
+    if let Some(h) = existing.iter().find(|h| h.app == id) {
+        return Ok(urls(st, h.port, h.subdomain.as_deref()));
+    }
+    let port = suggest(st).ok_or_else(|| format!("no free port between {SUGGEST_FROM} and {SUGGEST_TO}"))?;
+    let subdomain = st
+        .domain_base()
+        .map(|_| slug(&app.summary.title))
+        .filter(|sd| !sd.is_empty() && !existing.iter().any(|h| h.subdomain.as_deref() == Some(sd)));
+    let h = AppHttps {
+        app: id.to_string(),
+        port,
+        target_port: target,
+        subdomain,
+    };
+    st.with_db(|db| db.set_app_https(&h)).map_err(|e| e.to_string())?;
+    if let Some(problem) = st.proxies.sync(st).remove(id) {
+        return Err(problem);
+    }
+    tracing::info!(app = %id, port, target, by = %actor, "app HTTPS turned on");
+    Ok(urls(st, port, h.subdomain.as_deref()))
+}
+
 pub fn urls(st: &State, port: u16, subdomain: Option<&str>) -> Vec<String> {
     let info = st.certs.info();
     let mut out: Vec<String> = Vec::new();

@@ -60,7 +60,7 @@ pub async fn require_hearth_app(st: &State, app: &str) -> Result<(), Error> {
     }
 }
 
-async fn read_files(st: &State, app: &str) -> Result<(String, String), String> {
+pub(super) async fn read_files(st: &State, app: &str) -> Result<(String, String), String> {
     let v = st
         .helper
         .call(&Request::ReadAppFiles {

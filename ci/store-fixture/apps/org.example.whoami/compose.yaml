@@ -1,0 +1,10 @@
+services:
+  web:
+    image: traefik/whoami:latest
+    environment:
+      WHOAMI_NAME: ${SECRET_WORD}
+    volumes:
+      - ${APP_DATA}/data:/data
+    ports:
+      - "${WEB_PORT}:80"
+    restart: unless-stopped

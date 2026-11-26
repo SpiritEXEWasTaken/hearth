@@ -107,6 +107,12 @@ const MIGRATIONS: &[&str] = &[
     // 6: a subdomain per app under your own domain (https://<subdomain>.<name>.duckdns.org)
     "ALTER TABLE app_https ADD COLUMN subdomain TEXT;
      CREATE UNIQUE INDEX app_https_subdomain ON app_https(subdomain) WHERE subdomain IS NOT NULL;",
+    // 7: installed apps linked to a store entry by the user (store installs carry it in x-hearth)
+    "CREATE TABLE store_links (
+        app TEXT PRIMARY KEY,
+        entry TEXT NOT NULL,
+        linked_at INTEGER NOT NULL
+     );",
 ];
 
 /// An app served over HTTPS by Hearth.
@@ -604,6 +610,29 @@ impl Db {
             "INSERT OR REPLACE INTO migrations (app, status, fixes, updated_at) VALUES (?1, ?2, ?3, ?4)",
             params![app, status, fixes.join(" "), now()],
         )?;
+        Ok(())
+    }
+
+    // ----- store links -----
+
+    pub fn store_link(&self, app: &str) -> rusqlite::Result<Option<String>> {
+        self.conn
+            .query_row("SELECT entry FROM store_links WHERE app = ?1", [app], |r| {
+                r.get(0)
+            })
+            .optional()
+    }
+
+    pub fn set_store_link(&self, app: &str, entry: Option<&str>) -> rusqlite::Result<()> {
+        match entry {
+            Some(e) => self.conn.execute(
+                "INSERT OR REPLACE INTO store_links (app, entry, linked_at) VALUES (?1, ?2, ?3)",
+                params![app, e, now()],
+            )?,
+            None => self
+                .conn
+                .execute("DELETE FROM store_links WHERE app = ?1", [app])?,
+        };
         Ok(())
     }
 

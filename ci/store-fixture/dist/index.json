@@ -1,0 +1,64 @@
+{
+  "format": 1,
+  "generated": 1795703111,
+  "source": "https://github.com/SpiritEXEWasTaken/hearth-store",
+  "categories": [
+    {
+      "id": "network",
+      "name": "Network & DNS"
+    },
+    {
+      "id": "other",
+      "name": "Other"
+    }
+  ],
+  "apps": [
+    {
+      "id": "org.example.dnsblock",
+      "name": "Port Clash",
+      "summary": "Needs a fixed port that the test app already uses (store test entry)",
+      "category": "network",
+      "app_name": "portclash",
+      "icon": "icons/org.example.dnsblock.svg",
+      "icon_sha256": "44944e34a721797c3271cfc6b15dff81cd6fbbf66c7c96da53a34ed39be06ea5",
+      "bundle": "apps/org.example.dnsblock.json",
+      "sha256": "36d5dab5cf6d07f075eb99f0b7f41deb0c1cf2a0730c2f0d1786896ed287d275",
+      "badges": {
+        "ram_mb": 16,
+        "data_mb": 1,
+        "architectures": [
+          "amd64"
+        ],
+        "gpu": "none",
+        "https": "no",
+        "host_network": false,
+        "notice": false,
+        "screenshots": 1
+      }
+    },
+    {
+      "id": "org.example.whoami",
+      "name": "Whoami",
+      "summary": "A tiny web page that shows the request (store test entry)",
+      "category": "other",
+      "app_name": "whoami",
+      "icon": "icons/org.example.whoami.svg",
+      "icon_sha256": "de05c5a415b6cb5148753c1261178fac376c5a25b2ed079874928e1831df5798",
+      "bundle": "apps/org.example.whoami.json",
+      "sha256": "1598d9d49feea3ae7739af48b12a69a894d1e186e54ae6664199edb707619e09",
+      "badges": {
+        "ram_mb": 16,
+        "data_mb": 1,
+        "architectures": [
+          "amd64",
+          "arm64"
+        ],
+        "gpu": "none",
+        "https": "recommended",
+        "host_network": false,
+        "notice": true,
+        "screenshots": 1
+      }
+    }
+  ]
+}
