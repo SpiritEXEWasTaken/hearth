@@ -12,8 +12,12 @@ test('own domain: set up, get certificates, give an app a subdomain, open it', a
 	await page.goto('/settings');
 	await page.getByPlaceholder('yourname').fill('testhome');
 	await page.getByLabel(/DuckDNS token/).fill('00000000-0000-4000-8000-000000000000');
+	// CI machines have no Tailscale; every machine has a home-network-style address.
+	await page.getByLabel('The name points to').selectOption('lan');
 	await page.getByRole('button', { name: 'Save and get certificates' }).click();
-	await expect(page.getByRole('status').filter({ hasText: /Done\.|failed|didn't/ })).toHaveText('Done.', { timeout: 180_000 });
+	const status = page.getByRole('dialog').getByRole('status');
+	await expect(status).not.toHaveText('Working…', { timeout: 180_000 });
+	await expect(status).toHaveText('Done.');
 	await page.getByRole('button', { name: 'Close' }).last().click();
 	await expect(page.getByText('*.testhome.duckdns.org', { exact: true })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'https://testhome.duckdns.org' })).toBeVisible();
