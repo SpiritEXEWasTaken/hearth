@@ -38,7 +38,13 @@ pub async fn updates(refresh: bool, tx: &Tx) -> Result<Vec<SystemUpdate>, String
     if !refresh {
         args.push("--cached");
     }
-    let c = run::capture(FLATPAK, &args, Duration::from_secs(300)).await?;
+    let mut c = run::capture(FLATPAK, &args, Duration::from_secs(300)).await?;
+    if c.code != 0 && !refresh {
+        // No cached summary yet (e.g. root never fetched one): fetch it instead.
+        let _ = tx.send("no cached Flatpak summary, fetching it".into());
+        args.retain(|a| *a != "--cached");
+        c = run::capture(FLATPAK, &args, Duration::from_secs(300)).await?;
+    }
     if c.code != 0 {
         return Err(format!("flatpak remote-ls failed: {}", c.stderr.trim()));
     }
