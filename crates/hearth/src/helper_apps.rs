@@ -153,6 +153,7 @@ pub fn write_files(
         message: message.chars().take(500).collect(),
         compose: Some(compose.to_string()),
         env: Some(env.to_string()),
+        definition: None,
     };
     let data = serde_json::to_vec_pretty(&rev).map_err(|e| e.to_string())?;
     write_atomic(
@@ -162,6 +163,86 @@ pub fn write_files(
         None,
     )?;
     Ok(json!({ "revision": next }))
+}
+
+/// `[[id, yaml], …]` for every app folder with an `app.yaml` (service, native, link, package).
+pub fn list_definitions(cfg: &HelperConfig) -> Result<Value, String> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let rd = match fs::read_dir(&cfg.apps_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(json!(out)),
+        Err(e) => return Err(e.to_string()),
+    };
+    for e in rd.flatten() {
+        let Some(name) = e.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !proto::is_valid_hearth_app_name(&name) {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(e.path().join("app.yaml")) {
+            out.push((name, text));
+        }
+    }
+    out.sort();
+    Ok(json!(out))
+}
+
+/// Writes `app.yaml` and records a history revision. Refuses folders that hold a compose app.
+pub fn write_definition(
+    cfg: &HelperConfig,
+    app: &str,
+    yaml: &str,
+    message: &str,
+    actor: &str,
+) -> Result<Value, String> {
+    check_app(app)?;
+    if yaml.len() > 256 * 1024 {
+        return Err("file too large".into());
+    }
+    let dir = app_dir(cfg, app);
+    if dir.join("compose.yaml").exists() {
+        return Err(format!("{app} is a compose app"));
+    }
+    ensure_dir(&cfg.apps_dir, 0o750, cfg.daemon_gid)?;
+    ensure_dir(&dir, 0o750, cfg.daemon_gid)?;
+    ensure_dir(&history_dir(cfg, app), 0o700, None)?;
+    write_atomic(&dir.join("app.yaml"), yaml.as_bytes(), 0o640, cfg.daemon_gid)?;
+    let next = revisions(cfg, app).last().map(|(n, _)| n + 1).unwrap_or(1);
+    let rev = Revision {
+        revision: next,
+        time: now(),
+        actor: actor.chars().take(100).collect(),
+        message: message.chars().take(500).collect(),
+        compose: None,
+        env: None,
+        definition: Some(yaml.to_string()),
+    };
+    let data = serde_json::to_vec_pretty(&rev).map_err(|e| e.to_string())?;
+    write_atomic(
+        &history_dir(cfg, app).join(format!("{next:06}.json")),
+        &data,
+        0o600,
+        None,
+    )?;
+    Ok(json!({ "revision": next }))
+}
+
+/// The folder for native units (`/var/lib/hearth/units`).
+pub fn units_dir(cfg: &HelperConfig) -> PathBuf {
+    cfg.apps_dir.parent().unwrap_or(&cfg.apps_dir).join("units")
+}
+
+pub fn write_native_unit(cfg: &HelperConfig, app: &str, text: &str) -> Result<PathBuf, String> {
+    check_app(app)?;
+    if text.len() > 64 * 1024 {
+        return Err("unit file too large".into());
+    }
+    let dir = units_dir(cfg);
+    ensure_dir(&dir, 0o755, None)?;
+    let path = dir.join(format!("hearth-native-{app}.service"));
+    write_atomic(&path, text.as_bytes(), 0o644, None)?;
+    Ok(path)
 }
 
 pub fn list_history(cfg: &HelperConfig, app: &str) -> Result<Value, String> {

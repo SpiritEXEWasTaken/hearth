@@ -43,6 +43,8 @@ pub fn routes() -> Router<State> {
     Router::new()
         .route("/v1/apps", post(install))
         .route("/v1/apps/{id}/uninstall", post(uninstall))
+        .route("/v1/apps/add", post(add_app))
+        .route("/v1/apps/{id}/set", post(set_app))
         .route("/v1/apps/{id}/start", post(start))
         .route("/v1/apps/{id}/stop", post(stop))
         .route("/v1/apps/{id}/restart", post(restart))
@@ -211,6 +213,20 @@ async fn uninstall(
     Json(b): Json<UninstallBody>,
 ) -> ApiResult<Value> {
     p.require(scopes::READ)?;
+    if let Some(d) = super::kinds::find(&st, &app).await {
+        if b.dry_run {
+            return ok(json!({ "would_remove": app, "kind": d.kind.as_str() }));
+        }
+        can_write(&p)?;
+        let st2 = st.clone();
+        let app2 = app.clone();
+        let id = st
+            .jobs
+            .start(&st, "uninstall", &app, &actor(&p), move |job| async move {
+                super::kinds::remove(&st2, &job, &app2, &d).await
+            });
+        return ok(json!(JobRef { job: id }));
+    }
     engine::require_hearth_app(&st, &app).await?;
     if b.dry_run {
         return ok(json!({ "would_uninstall": app, "delete_data": b.delete_data }));
@@ -226,10 +242,85 @@ async fn uninstall(
     ok(json!(JobRef { job: id }))
 }
 
+// ----- service, native, link and package apps (M4c) -----
+
+async fn add_app(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Json(b): Json<super::kinds::AddBody>,
+) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    let caller = p.uid.and_then(crate::users::name_of);
+    let (id, d) = super::kinds::build(&b, caller.as_deref())?;
+    let (all, _) = super::apps::list(&st).await;
+    if all.iter().any(|a| a.summary.id == id) {
+        return Err(Error::Usage(format!(
+            "there's already an app called '{id}' (choose another name with --id)"
+        ))
+        .into());
+    }
+    let unit_text =
+        (d.kind == hearth_core::model::AppKind::Native).then(|| super::kinds::native_unit(&id, &d));
+    if b.dry_run {
+        let yaml = serde_yaml_ng::to_string(&d).map_err(|e| Error::Other(e.to_string()))?;
+        return ok(json!({ "id": id, "definition": d, "app_yaml": yaml, "unit_file": unit_text }));
+    }
+    super::kinds::can_add(&p, &d)?;
+    let st2 = st.clone();
+    let id2 = id.clone();
+    let who = actor(&p);
+    let start = b.start;
+    let job = st
+        .jobs
+        .start(&st, "add", &id, &who.clone(), move |job| async move {
+            super::kinds::add(&st2, &job, &id2, &d, start, &who).await
+        });
+    ok(json!(JobRef { job }))
+}
+
+async fn set_app(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Path(app): Path<String>,
+    Json(i): Json<super::kinds::AppDefinitionInput>,
+) -> ApiResult<Value> {
+    p.require(scopes::READ)?;
+    let Some(d) = super::kinds::find(&st, &app).await else {
+        return Err(Error::Usage(format!(
+            "`hearth app set` works for service, native, link and package apps; '{app}' isn't one"
+        ))
+        .into());
+    };
+    can_write(&p)?;
+    let st2 = st.clone();
+    let app2 = app.clone();
+    let who = actor(&p);
+    let id = st
+        .jobs
+        .start(&st, "set", &app, &who.clone(), move |job| async move {
+            super::kinds::set_meta(&st2, &job, &app2, d, &i, &who).await
+        });
+    ok(json!(JobRef { job: id }))
+}
+
 // ----- start / stop / restart -----
 
 async fn state_change(st: State, p: Principal, app: String, action: StateAction) -> ApiResult<Value> {
     p.require(scopes::READ)?;
+    if let Some(d) = super::kinds::find(&st, &app).await {
+        can_write(&p)?;
+        let (kind, unit_action) = match action {
+            StateAction::Start => ("start", proto::UnitAction::Start),
+            StateAction::Stop => ("stop", proto::UnitAction::Stop),
+            StateAction::Restart => ("restart", proto::UnitAction::Restart),
+        };
+        let st2 = st.clone();
+        let app2 = app.clone();
+        let id = st.jobs.start(&st, kind, &app, &actor(&p), move |job| async move {
+            super::kinds::set_running(&st2, &job, &app2, &d, unit_action).await
+        });
+        return ok(json!(JobRef { job: id }));
+    }
     engine::require_hearth_app(&st, &app).await?;
     can_write(&p)?;
     let kind = match action {

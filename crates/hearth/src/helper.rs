@@ -6,7 +6,7 @@
 //! `/var/lib/hearth/apps`); everything else is read-only. Connections are accepted only from root and from the
 //! Hearth daemon's user, checked with the kernel's peer credentials (SO_PEERCRED).
 
-use crate::{helper_apps, sysupdate, unixhttp};
+use crate::{helper_apps, helper_units, sysupdate, unixhttp};
 use hearth_core::model::DockerEndpoint;
 use hearth_core::proto::{self, LogRecord, Logs, Request, Response};
 use serde_json::Value;
@@ -199,6 +199,16 @@ fn log_request(req: &Request, uid: u32) {
             tracing::info!(uid, ?ids, security_only, "system upgrade")
         }
         Request::SystemUpdates { refresh: true } => tracing::info!(uid, "refresh package lists"),
+        Request::WriteAppDefinition {
+            app, actor, message, ..
+        } => {
+            tracing::info!(uid, app, actor, message, "write app definition")
+        }
+        Request::UnitAction { unit, user, action } => {
+            tracing::info!(uid, unit, ?user, ?action, "unit action")
+        }
+        Request::InstallNativeUnit { app, .. } => tracing::info!(uid, app, "install native unit"),
+        Request::RemoveNativeUnit { app } => tracing::info!(uid, app, "remove native unit"),
         Request::PackageChange {
             action,
             names,
@@ -284,6 +294,27 @@ async fn handle(req: Request, cfg: &HelperConfig, out: &mut Out<'_>) -> Response
         })
         .await
         .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),
+        Request::ListAppDefinitions => helper_apps::list_definitions(cfg),
+        Request::WriteAppDefinition {
+            app,
+            yaml,
+            message,
+            actor,
+        } => helper_apps::write_definition(cfg, &app, &yaml, &message, &actor),
+        Request::UnitStatus { unit, user } => helper_units::status(&unit, user.as_deref()).await,
+        Request::UnitAction { unit, user, action } => {
+            helper_units::action(&unit, user.as_deref(), action).await
+        }
+        Request::UnitLogs {
+            unit,
+            user,
+            tail,
+            since,
+        } => helper_units::logs(&unit, user.as_deref(), tail, since).await,
+        Request::InstallNativeUnit { app, unit_text } => {
+            helper_units::install_native(cfg, &app, &unit_text).await
+        }
+        Request::RemoveNativeUnit { app } => helper_units::remove_native(&app).await,
         Request::PackageSearch { terms, backend } => sysupdate::package_search(&terms, &backend)
             .await
             .map(|r| serde_json::to_value(r).unwrap_or(Value::Null)),

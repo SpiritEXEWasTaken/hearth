@@ -12,7 +12,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use hearth_core::model::{AppDetail, AppSummary, HostStats, LogLine, NewToken, Status, TokenInfo, scopes};
+use hearth_core::model::{
+    AppDetail, AppSummary, DockerEndpoint, HostStats, LogLine, NewToken, Status, TokenInfo, scopes,
+};
 use hearth_core::output::Envelope;
 use hearth_core::{Error, ExitCode};
 use serde::Deserialize;
@@ -120,8 +122,11 @@ async fn app_logs(
     Query(q): Query<LogsQuery>,
 ) -> ApiResult<Vec<LogLine>> {
     p.require(scopes::READ)?;
-    let app = find_app(&state, &id).await?;
     let tail = q.tail.unwrap_or(200);
+    if let Some(d) = super::kinds::find(&state, &id).await {
+        return ok(super::kinds::logs(&state, &id, &d, tail, q.since).await?);
+    }
+    let app = find_app(&state, &id).await?;
     let mut out = Vec::new();
     let mut matched = false;
     for c in &app.summary.containers {
@@ -132,7 +137,12 @@ async fn app_logs(
         matched = true;
         let logs = state
             .helper
-            .logs(&app.summary.endpoint, &c.id, tail, q.since)
+            .logs(
+                app.summary.endpoint.as_ref().unwrap_or(&DockerEndpoint::Root),
+                &c.id,
+                tail,
+                q.since,
+            )
             .await
             .map_err(Error::Other)?;
         out.extend(logs.lines.into_iter().map(|l| LogLine {

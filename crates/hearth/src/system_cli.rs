@@ -1,7 +1,7 @@
 //! `hearth system …`: system updates from the CLI.
 
 use crate::changes::{confirm, follow};
-use crate::cli::{GlobalArgs, PackageCmd, SystemCmd};
+use crate::cli::{AddCmd, AddCommon, GlobalArgs, PackageCmd, SystemCmd};
 use crate::client::Client;
 use crate::render;
 use hearth_core::model::{
@@ -355,4 +355,127 @@ fn print_package_plan(p: &PackagePlan) {
     for e in &p.errors {
         println!("error: {e}");
     }
+}
+
+// ----- service, native, link and package apps (M4c) -----
+
+fn common_json(c: &AddCommon) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    let mut put = |k: &str, v: Option<Value>| {
+        if let Some(v) = v {
+            m.insert(k.to_string(), v);
+        }
+    };
+    put("title", c.title.clone().map(Value::from));
+    put("icon", c.icon.clone().map(Value::from));
+    put("port", c.port.map(Value::from));
+    put("path", c.path.clone().map(Value::from));
+    put("url", c.url.clone().map(Value::from));
+    put(
+        "dashboard",
+        if c.dashboard {
+            Some(Value::Bool(true))
+        } else if c.no_dashboard {
+            Some(Value::Bool(false))
+        } else {
+            None
+        },
+    );
+    m
+}
+
+pub async fn add(c: &Client, g: &GlobalArgs, cmd: &AddCmd) -> Result<ExitCode, Error> {
+    let (kind, mut body, common) = match cmd {
+        AddCmd::Link { name, common } => ("link", json!({ "id": name }), common),
+        AddCmd::Service {
+            unit,
+            user,
+            id,
+            common,
+        } => ("service", json!({ "unit": unit, "user": user, "id": id }), common),
+        AddCmd::Native {
+            name,
+            exec,
+            user,
+            workdir,
+            env_file,
+            memory_max,
+            restart,
+            no_start,
+            common,
+        } => (
+            "native",
+            json!({
+                "id": name, "exec": exec, "user": user, "workdir": workdir, "env_file": env_file,
+                "memory_max": memory_max, "restart": restart, "start": !no_start,
+            }),
+            common,
+        ),
+        AddCmd::Package {
+            package,
+            flatpak,
+            unit,
+            id,
+            common,
+        } => (
+            "package",
+            json!({
+                "package": package, "package_backend": if *flatpak { "flatpak" } else { "native" },
+                "unit": unit, "id": id,
+            }),
+            common,
+        ),
+    };
+    if let Some(m) = body.as_object_mut() {
+        m.insert("kind".into(), Value::from(kind));
+        m.extend(common_json(common));
+        m.retain(|_, v| !v.is_null());
+    }
+    let mut preview = body.clone();
+    preview["dry_run"] = json!(true);
+    let plan: Value = c.post("/v1/apps/add", Some(preview)).await?;
+    if g.dry_run || !g.json {
+        if g.json {
+            print_json(&plan);
+        } else {
+            println!("Would add {} app '{}':", kind, plan["id"].as_str().unwrap_or(""));
+            print!("{}", plan["app_yaml"].as_str().unwrap_or(""));
+            if let Some(u) = plan["unit_file"].as_str() {
+                println!(
+                    "\nwith this systemd unit (hearth-native-{}.service):",
+                    plan["id"].as_str().unwrap_or("")
+                );
+                print!("{u}");
+            }
+        }
+    }
+    if g.dry_run {
+        return Ok(ExitCode::Ok);
+    }
+    confirm(
+        g,
+        &format!("Add {kind} app '{}'", plan["id"].as_str().unwrap_or("")),
+    )?;
+    let r: JobRef = c.post("/v1/apps/add", Some(body)).await?;
+    follow(c, g, r).await
+}
+
+pub async fn set(c: &Client, g: &GlobalArgs, app: &str, common: &AddCommon) -> Result<ExitCode, Error> {
+    let body = Value::Object(common_json(common));
+    if body.as_object().is_some_and(|m| m.is_empty()) {
+        return Err(Error::Usage(
+            "nothing to change: give --title, --icon, --port, --path, --url, --dashboard or --no-dashboard"
+                .into(),
+        ));
+    }
+    if g.dry_run {
+        if g.json {
+            print_json(&json!({ "would_set": body, "app": app }));
+        } else {
+            println!("Would change {app}: {body}");
+        }
+        return Ok(ExitCode::Ok);
+    }
+    let r: JobRef = c.post(&format!("/v1/apps/{}/set", enc(app)), Some(body)).await?;
+    follow(c, g, r).await
 }

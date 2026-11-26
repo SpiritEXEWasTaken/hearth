@@ -178,9 +178,16 @@ pub async fn report(st: &State) -> Result<Report, String> {
             .working_dir
             .as_deref()
             .is_some_and(|w| w.starts_with(apps::CASAOS_APPS_DIR));
-        if s.endpoint != DockerEndpoint::Root || !(s.managed_by == ManagedBy::Casaos || is_casaos_dir) {
-            out.not_casaos
-                .push(format!("{} ({:?}, {})", s.id, s.managed_by, s.endpoint.label()));
+        if s.kind != hearth_core::model::AppKind::Compose {
+            continue;
+        }
+        if s.endpoint != Some(DockerEndpoint::Root) || !(s.managed_by == ManagedBy::Casaos || is_casaos_dir) {
+            out.not_casaos.push(format!(
+                "{} ({:?}, {})",
+                s.id,
+                s.managed_by,
+                s.endpoint.as_ref().map(|e| e.label()).unwrap_or_default()
+            ));
             continue;
         }
         let containers: Vec<String> = s
@@ -315,7 +322,7 @@ pub async fn adopt(
         .working_dir
         .as_deref()
         .is_some_and(|w| w.starts_with(apps::CASAOS_APPS_DIR));
-    if !is_casaos || found.summary.endpoint != DockerEndpoint::Root {
+    if !is_casaos || found.summary.endpoint != Some(DockerEndpoint::Root) {
         return Err(JobError::failed(format!("{app} isn't a CasaOS app")));
     }
     let (report, n, _) = plan_app(st, app).await?;

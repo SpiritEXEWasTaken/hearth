@@ -1,6 +1,6 @@
 ---
 name: hearth
-description: Manage the home server through the Hearth CLI (apps, versions, updates, logs, backups, host stats, system/package updates and reboot status, CasaOS migration). Use when asked about server apps, their status, memory, versions, updates, logs or backups, or anything previously done with casaos-cli.
+description: Manage the home server through the Hearth CLI (apps, versions, updates, logs, backups, host stats, system/package updates and reboot status, systemd services and other non-Docker apps, CasaOS migration). Use when asked about server apps, their status, memory, versions, updates, logs or backups, or anything previously done with casaos-cli.
 ---
 
 # Using Hearth safely
@@ -114,6 +114,27 @@ Packages: `hearth package search|info` are read-only. `hearth package install|re
 `system:write`; always run `--dry-run --json` first and show the person the full `install`,
 `update` and `remove` lists. Never add `--allow-critical` yourself: it exists so that removing
 SSH, Docker, the kernel or the network stack needs the person's explicit decision.
+
+## Service, native, link and package apps
+
+See `docs/app-kinds.md`. Each app has `"kind"` (`compose`, `service`, `native`, `link`,
+`package`) and `"dashboard"` (true when it has a web page; only those are on the main app list).
+Service/native/package apps also have `"unit"` with the systemd state.
+
+```sh
+hearth add service <unit> [--user NAME] --dry-run --json   # then without --dry-run, with --yes
+hearth add native <name> --exec "/abs/path args" [--user NAME] --dry-run --json
+hearth add link <name> --url <address>
+hearth add package <name> [--flatpak] [--unit UNIT]
+hearth app set <app> [--title T] [--port P] [--url U] [--dashboard|--no-dashboard]
+```
+
+- `hearth app start|stop|restart|logs` and `hearth uninstall` work for them too. Stop disables the
+  unit, so it stays stopped after a reboot.
+- `uninstall` of a service app only makes Hearth forget it; the service keeps running. For a
+  native app it stops and unlinks the unit Hearth wrote.
+- Never add a native app that runs as root, and never stop a service the person relies on (SSH,
+  Tailscale, Samba, `claude-remote-control`), without asking first.
 
 ## Migrating from CasaOS
 

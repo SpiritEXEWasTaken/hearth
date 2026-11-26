@@ -245,6 +245,7 @@ pub async fn list(state: &State) -> (Vec<AppDetail>, Vec<String>) {
             store_app_id,
         });
     }
+    out.extend(super::kinds::list(state).await);
     (out, warnings)
 }
 
@@ -401,8 +402,11 @@ async fn enrich(state: &State, g: &Group) -> Enriched {
         summary: AppSummary {
             id: g.id.clone(),
             title,
+            kind: hearth_core::model::AppKind::Compose,
+            dashboard: web_url.is_some(),
             managed_by: g.managed_by,
-            endpoint: g.endpoint.clone(),
+            endpoint: Some(g.endpoint.clone()),
+            unit: None,
             // Only apps whose files Hearth manages can be changed.
             read_only: !(g.managed_by == ManagedBy::Hearth && g.endpoint == DockerEndpoint::Root),
             state: app_state(&states),

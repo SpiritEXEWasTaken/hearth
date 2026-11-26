@@ -172,13 +172,22 @@ fn main_image(a: &AppSummary) -> Option<&ImageVersion> {
     a.images.first()
 }
 
+/// The main app list (apps with a web page) and, below it, the services and programs that
+/// aren't on the dashboard.
 pub fn apps(apps: &[AppSummary]) {
-    if apps.is_empty() {
-        println!("No apps found.");
-        return;
+    let (main, other): (Vec<&AppSummary>, Vec<&AppSummary>) = apps.iter().partition(|a| a.dashboard);
+    app_table(&main);
+    if !other.is_empty() {
+        println!();
+        println!("Not on the dashboard (no web page):");
+        app_table(&other);
     }
+}
+
+fn app_table(apps: &[&AppSummary]) {
     let mut rows = vec![vec![
         "APP".into(),
+        "KIND".into(),
         "STATE".into(),
         "HEALTH".into(),
         "MEMORY".into(),
@@ -189,11 +198,17 @@ pub fn apps(apps: &[AppSummary]) {
     for a in apps {
         let img = main_image(a);
         let mut where_ = String::new();
-        if a.endpoint != hearth_core::model::DockerEndpoint::Root {
-            where_ = format!(" [{}]", a.endpoint.label());
+        if let Some(ep) = &a.endpoint
+            && *ep != hearth_core::model::DockerEndpoint::Root
+        {
+            where_ = format!(" [{}]", ep.label());
+        }
+        if let Some(u) = a.unit.as_ref().and_then(|u| u.user.as_ref()) {
+            where_ = format!(" [user {u}]");
         }
         rows.push(vec![
             format!("{}{where_}", a.id),
+            a.kind.as_str().into(),
             state_str(a),
             a.health.clone().unwrap_or_else(|| "-".into()),
             a.memory_bytes.map(bytes).unwrap_or_else(|| "-".into()),
@@ -227,7 +242,24 @@ pub fn app_detail(d: &AppDetail) {
         a.managed_by,
         if a.read_only { " (read-only in Hearth)" } else { "" }
     );
-    println!("  docker:     {}", a.endpoint.label());
+    println!("  kind:       {}", a.kind.as_str());
+    if let Some(ep) = &a.endpoint {
+        println!("  docker:     {}", ep.label());
+    }
+    if let Some(u) = &a.unit {
+        println!(
+            "  unit:       {}{} ({}, {}/{})",
+            u.name,
+            u.user
+                .as_ref()
+                .map(|u| format!(" (user {u})"))
+                .unwrap_or_default(),
+            u.unit_file_state,
+            u.active_state,
+            u.sub_state
+        );
+    }
+    println!("  dashboard:  {}", if a.dashboard { "yes" } else { "no" });
     if let Some(m) = a.memory_bytes {
         println!("  memory:     {}", bytes(m));
     }

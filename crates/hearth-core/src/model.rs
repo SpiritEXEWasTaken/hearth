@@ -101,8 +101,21 @@ pub struct AppSummary {
     /// Stable id: the compose project name (or container name for single containers).
     pub id: String,
     pub title: String,
+    /// What kind of app: a Docker Compose project, a systemd service, a program Hearth runs, a
+    /// link, or an installed package.
+    #[serde(default)]
+    pub kind: AppKind,
+    /// Shown in the main app list (the dashboard). True for apps with a web page; services and
+    /// programs without one are managed in their own section.
+    #[serde(default)]
+    pub dashboard: bool,
     pub managed_by: ManagedBy,
-    pub endpoint: DockerEndpoint,
+    /// The Docker daemon, for Docker apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<DockerEndpoint>,
+    /// The systemd unit, for service, native and package apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<UnitStatus>,
     /// Hearth can change this app (false for rootless/external apps until you opt in).
     pub read_only: bool,
     pub state: AppState,
@@ -474,4 +487,175 @@ pub struct PackageResult {
     pub action: String,
     pub names: Vec<String>,
     pub reboot: RebootStatus,
+}
+
+// ----- M4c: app kinds -----
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppKind {
+    /// A Docker Compose project.
+    #[default]
+    Compose,
+    /// An existing systemd unit (system or user), e.g. smbd or tailscaled.
+    Service,
+    /// A program Hearth runs as a hardened systemd unit it writes itself.
+    Native,
+    /// A shortcut to something Hearth doesn't run (a router, another PC); only checked for
+    /// reachability.
+    Link,
+    /// An app installed through the package manager or Flatpak.
+    Package,
+}
+
+impl AppKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AppKind::Compose => "compose",
+            AppKind::Service => "service",
+            AppKind::Native => "native",
+            AppKind::Link => "link",
+            AppKind::Package => "package",
+        }
+    }
+}
+
+/// A systemd unit's state, as `systemctl show` reports it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UnitStatus {
+    pub name: String,
+    /// Owner of a user unit; None for system units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// `loaded`, `not-found`, `masked`…
+    pub load_state: String,
+    /// `active`, `inactive`, `failed`, `activating`…
+    pub active_state: String,
+    pub sub_state: String,
+    /// `enabled`, `disabled`, `static`, `linked`…
+    pub unit_file_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_pid: Option<u32>,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// `app.yaml` of a service, native, link or package app (compose apps use compose.yaml).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppDefinition {
+    pub kind: AppKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Override: show in the main app list or not. Default: when it has a web page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashboard: Option<bool>,
+    /// A full web address (required for links).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// A web page on this host: port and path (instead of `url`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The systemd unit (service, package; native apps get `hearth-native-<id>.service`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Service: the owner of a user unit. Native: the user the program runs as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Native: the command line (absolute path first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<String>,
+    /// Native: e.g. `512M`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max: Option<String>,
+    /// Native: `on-failure` (default), `always` or `no`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<String>,
+    /// Package: the package name or Flatpak app id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Package: `native` or `flatpak`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_backend: Option<String>,
+}
+
+impl AppDefinition {
+    /// The web address: `url`, or `http://<host>:<port><path>`.
+    pub fn web_url(&self, host: &str) -> Option<String> {
+        if let Some(u) = &self.url {
+            return Some(u.clone());
+        }
+        self.port.map(|p| {
+            let path = self.path.clone().unwrap_or_else(|| "/".into());
+            let path = if path.starts_with('/') {
+                path
+            } else {
+                format!("/{path}")
+            };
+            format!("http://{host}:{p}{path}")
+        })
+    }
+
+    pub fn on_dashboard(&self, host: &str) -> bool {
+        self.dashboard.unwrap_or_else(|| self.web_url(host).is_some())
+    }
+
+    /// The systemd unit this app is about, if any.
+    pub fn unit_name(&self, id: &str) -> Option<String> {
+        match self.kind {
+            AppKind::Native => Some(format!("hearth-native-{id}.service")),
+            AppKind::Service | AppKind::Package => self.unit.clone(),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    #[test]
+    fn web_url_and_dashboard() {
+        let mut d = AppDefinition {
+            kind: AppKind::Service,
+            title: "Samba".into(),
+            unit: Some("smbd.service".into()),
+            ..Default::default()
+        };
+        assert_eq!(d.web_url("jarvis"), None);
+        assert!(!d.on_dashboard("jarvis"));
+        d.port = Some(8080);
+        d.path = Some("admin".into());
+        assert_eq!(d.web_url("jarvis").as_deref(), Some("http://jarvis:8080/admin"));
+        assert!(d.on_dashboard("jarvis"));
+        d.dashboard = Some(false);
+        assert!(!d.on_dashboard("jarvis"));
+        let n = AppDefinition {
+            kind: AppKind::Native,
+            title: "x".into(),
+            ..Default::default()
+        };
+        assert_eq!(n.unit_name("bot").as_deref(), Some("hearth-native-bot.service"));
+    }
+
+    #[test]
+    fn old_app_summaries_still_parse() {
+        // JSON from M3 (no kind/dashboard, endpoint as an object) reads as a compose app.
+        let v = serde_json::json!({
+            "id": "jellyfin", "title": "Jellyfin", "managed_by": "hearth",
+            "endpoint": {"kind": "root"}, "read_only": false, "state": "running",
+            "health": null, "memory_bytes": null, "web_url": null, "icon": null,
+            "containers": [], "images": []
+        });
+        let s: Result<AppSummary, _> = serde_json::from_value(v);
+        assert!(s.is_ok_and(|s| s.kind == AppKind::Compose && s.endpoint == Some(DockerEndpoint::Root)));
+    }
 }

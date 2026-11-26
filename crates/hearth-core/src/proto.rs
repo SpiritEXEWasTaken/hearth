@@ -183,6 +183,75 @@ pub enum Request {
         backend: String,
         simulate: bool,
     },
+
+    // ----- M4c: service, native, link and package apps -----
+    /// `app.yaml` of every app that has one: `[[id, yaml], …]`.
+    ListAppDefinitions,
+    /// Writes `app.yaml` (with a history revision). Returns the revision number.
+    WriteAppDefinition {
+        app: String,
+        yaml: String,
+        message: String,
+        actor: String,
+    },
+    /// State of a system unit, or of a user's unit when `user` is set.
+    UnitStatus {
+        unit: String,
+        user: Option<String>,
+    },
+    UnitAction {
+        unit: String,
+        user: Option<String>,
+        action: UnitAction,
+    },
+    /// Recent journal lines of a unit.
+    UnitLogs {
+        unit: String,
+        user: Option<String>,
+        tail: u32,
+        /// Unix seconds; only lines after this time.
+        since: Option<i64>,
+    },
+    /// Writes `hearth-native-<app>.service` under /var/lib/hearth/units and links it into
+    /// systemd (not started). The daemon renders the unit text.
+    InstallNativeUnit {
+        app: String,
+        unit_text: String,
+    },
+    /// Stops, disables and unlinks a native app's unit (the file is kept with the app folder).
+    RemoveNativeUnit {
+        app: String,
+    },
+}
+
+/// What to do with a systemd unit. Start and stop also enable and disable it, so a stopped
+/// app stays stopped after a reboot (the same rule as compose apps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+/// A systemd unit name: letters, digits and `@._:-`, ending in `.service` (or another unit
+/// type), never starting with `-`.
+pub fn is_valid_unit_name(s: &str) -> bool {
+    let types = [".service", ".socket", ".timer", ".target", ".mount", ".path"];
+    !s.is_empty()
+        && s.len() <= 200
+        && !s.starts_with('-')
+        && types.iter().any(|t| s.ends_with(t) && s.len() > t.len())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "@._:-\\".contains(c))
+}
+
+/// A Linux user name (as Hearth accepts it).
+pub fn is_valid_user_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 32
+        && !s.starts_with('-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -258,6 +327,9 @@ pub struct Revision {
     pub compose: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<String>,
+    /// `app.yaml`, for service/native/link/package apps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +403,20 @@ pub fn is_valid_app_name(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unit_and_user_names() {
+        assert!(is_valid_unit_name("smbd.service"));
+        assert!(is_valid_unit_name("devmon@devmon.service"));
+        assert!(is_valid_unit_name("claude-remote-control.service"));
+        assert!(!is_valid_unit_name("smbd"));
+        assert!(!is_valid_unit_name(".service"));
+        assert!(!is_valid_unit_name("--now.service"));
+        assert!(!is_valid_unit_name("a b.service"));
+        assert!(is_valid_user_name("jarvis"));
+        assert!(!is_valid_user_name("-root"));
+        assert!(!is_valid_user_name("ja rvis"));
+    }
 
     #[test]
     fn package_names() {

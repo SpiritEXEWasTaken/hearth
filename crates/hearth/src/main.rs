@@ -8,6 +8,7 @@ mod daemon;
 mod fixes;
 mod helper;
 mod helper_apps;
+mod helper_units;
 mod render;
 mod system_cli;
 mod sysupdate;

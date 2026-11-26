@@ -662,6 +662,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff",
+ "reqwest",
  "rusqlite",
  "rustix",
  "serde",

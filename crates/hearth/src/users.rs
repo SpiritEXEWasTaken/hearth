@@ -7,6 +7,16 @@ pub fn uid_of(user: &str) -> Option<u32> {
     passwd_uid(&text, user)
 }
 
+/// The name of the user with this uid.
+pub fn name_of(uid: u32) -> Option<String> {
+    let text = fs::read_to_string("/etc/passwd").ok()?;
+    text.lines().find_map(|l| {
+        let mut f = l.split(':');
+        let name = f.next()?;
+        (f.nth(1)?.parse::<u32>().ok()? == uid).then(|| name.to_string())
+    })
+}
+
 /// The user's primary group id.
 pub fn primary_gid_of(user: &str) -> Option<u32> {
     let text = fs::read_to_string("/etc/passwd").ok()?;

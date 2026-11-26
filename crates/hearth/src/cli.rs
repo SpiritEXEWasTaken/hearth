@@ -119,6 +119,10 @@ pub enum Command {
     /// Packages: search, details, install, remove (the distro's packages, or Flatpak apps).
     #[command(subcommand)]
     Package(PackageCmd),
+    /// Add a non-Docker app: an existing systemd service, a program for Hearth to run, a link,
+    /// or an installed package. Apps without a web page stay off the main app list.
+    #[command(subcommand)]
+    Add(AddCmd),
     /// Move apps from another manager to Hearth.
     #[command(subcommand)]
     Migrate(MigrateCmd),
@@ -156,6 +160,96 @@ pub enum SystemCmd {
         /// Only security updates (all of them, or only those among the given ids).
         #[arg(long)]
         security: bool,
+    },
+}
+
+/// Options every added app has.
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct AddCommon {
+    /// The name shown in Hearth.
+    #[arg(long)]
+    pub title: Option<String>,
+    /// An icon URL.
+    #[arg(long)]
+    pub icon: Option<String>,
+    /// Its web page on this host: the port…
+    #[arg(long)]
+    pub port: Option<u16>,
+    /// …and the path (default /).
+    #[arg(long)]
+    pub path: Option<String>,
+    /// Or a full web address.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Show it in the main app list even without a web page.
+    #[arg(long, conflicts_with = "no_dashboard")]
+    pub dashboard: bool,
+    /// Keep it off the main app list even with a web page.
+    #[arg(long)]
+    pub no_dashboard: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AddCmd {
+    /// A shortcut to something Hearth doesn't run (router, another PC); its address is checked.
+    Link {
+        /// The app's name (lowercase letters, digits, '-', '_').
+        name: String,
+        #[command(flatten)]
+        common: AddCommon,
+    },
+    /// An existing systemd service, e.g. smbd or tailscaled (a user's unit with --user).
+    Service {
+        /// The unit, e.g. smbd or smbd.service.
+        unit: String,
+        /// Owner of a user unit (systemctl --user).
+        #[arg(long)]
+        user: Option<String>,
+        /// The app's name (default: from the unit).
+        #[arg(long)]
+        id: Option<String>,
+        #[command(flatten)]
+        common: AddCommon,
+    },
+    /// A program for Hearth to run as a hardened systemd service.
+    Native {
+        name: String,
+        /// The command line; the program as an absolute path.
+        #[arg(long)]
+        exec: String,
+        /// The user it runs as (default: you).
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        workdir: Option<String>,
+        /// A file with KEY=VALUE lines for its environment.
+        #[arg(long)]
+        env_file: Option<String>,
+        /// A memory limit, e.g. 512M.
+        #[arg(long)]
+        memory_max: Option<String>,
+        /// on-failure (default), always or no.
+        #[arg(long)]
+        restart: Option<String>,
+        /// Add it without starting it.
+        #[arg(long)]
+        no_start: bool,
+        #[command(flatten)]
+        common: AddCommon,
+    },
+    /// An installed package or Flatpak app, as an app (with its service, if it has one).
+    Package {
+        /// The package name or Flatpak app id.
+        package: String,
+        #[arg(long)]
+        flatpak: bool,
+        /// Its systemd unit, if it runs as a service.
+        #[arg(long)]
+        unit: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+        #[command(flatten)]
+        common: AddCommon,
     },
 }
 
@@ -209,6 +303,12 @@ pub enum AppsCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum AppCmd {
+    /// Change a service/native/link/package app's title, icon, web address or dashboard placement.
+    Set {
+        app: String,
+        #[command(flatten)]
+        common: AddCommon,
+    },
     /// Details of one app: containers, images, versions, CasaOS findings.
     Info {
         app: String,

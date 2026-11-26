@@ -437,6 +437,7 @@ pub async fn run(cmd: &Command, g: &GlobalArgs) -> Option<Result<ExitCode, Error
         Command::Migrate(MigrateCmd::Casaos { action }) => migrate(&c, g, action.as_ref()).await,
         Command::System(cmd) => system_cli::run(&c, g, cmd).await,
         Command::Package(cmd) => system_cli::package(&c, g, cmd).await,
+        Command::Add(cmd) => system_cli::add(&c, g, cmd).await,
         _ => return None,
     })
 }
@@ -677,6 +678,7 @@ async fn uninstall(c: &Client, g: &GlobalArgs, app: &str, delete_data: bool) -> 
 
 async fn app(c: &Client, g: &GlobalArgs, cmd: &AppCmd) -> Option<Result<ExitCode, Error>> {
     Some(match cmd {
+        AppCmd::Set { app, common } => system_cli::set(c, g, app, common).await,
         AppCmd::Start { app } | AppCmd::Restart { app } | AppCmd::Stop { app } => {
             let verb = match cmd {
                 AppCmd::Start { .. } => "start",
