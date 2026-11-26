@@ -126,6 +126,9 @@ pub struct AppSummary {
     /// Hearth serves the app over HTTPS on this port (https://<server>:<port>).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub https_port: Option<u16>,
+    /// `<subdomain>.<your domain>` also reaches the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub https_subdomain: Option<String>,
     pub icon: Option<String>,
     pub containers: Vec<ContainerSummary>,
     pub images: Vec<ImageVersion>,

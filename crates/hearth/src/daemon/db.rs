@@ -104,6 +104,9 @@ const MIGRATIONS: &[&str] = &[
         target_port INTEGER NOT NULL,
         created_at INTEGER NOT NULL
      );",
+    // 6: a subdomain per app under your own domain (https://<subdomain>.<name>.duckdns.org)
+    "ALTER TABLE app_https ADD COLUMN subdomain TEXT;
+     CREATE UNIQUE INDEX app_https_subdomain ON app_https(subdomain) WHERE subdomain IS NOT NULL;",
 ];
 
 /// An app served over HTTPS by Hearth.
@@ -114,6 +117,8 @@ pub struct AppHttps {
     pub port: u16,
     /// The app's own (plain HTTP) port on this machine.
     pub target_port: u16,
+    /// `<subdomain>.<your domain>` also reaches the app, on port 443.
+    pub subdomain: Option<String>,
 }
 
 /// A web UI account.
@@ -414,12 +419,13 @@ impl Db {
     pub fn list_app_https(&self) -> rusqlite::Result<Vec<AppHttps>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT app, port, target_port FROM app_https ORDER BY port")?;
+            .prepare("SELECT app, port, target_port, subdomain FROM app_https ORDER BY port")?;
         let rows = stmt.query_map([], |r| {
             Ok(AppHttps {
                 app: r.get(0)?,
                 port: r.get(1)?,
                 target_port: r.get(2)?,
+                subdomain: r.get(3)?,
             })
         })?;
         rows.collect()
@@ -427,9 +433,9 @@ impl Db {
 
     pub fn set_app_https(&self, h: &AppHttps) -> rusqlite::Result<()> {
         self.conn.execute(
-            "INSERT INTO app_https (app, port, target_port, created_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(app) DO UPDATE SET port = ?2, target_port = ?3",
-            params![h.app, h.port, h.target_port, now()],
+            "INSERT INTO app_https (app, port, target_port, created_at, subdomain) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(app) DO UPDATE SET port = ?2, target_port = ?3, subdomain = ?5",
+            params![h.app, h.port, h.target_port, now(), h.subdomain],
         )?;
         Ok(())
     }

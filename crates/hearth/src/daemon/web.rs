@@ -110,11 +110,37 @@ pub async fn serve(state: State, listen: Vec<SocketAddr>) {
     let Some(acceptor) = tls_acceptor(&state) else {
         return;
     };
-    let app = router(state);
+    let app = router(state.clone());
     let limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let handler: Handler = Arc::new(move |peer, mut req| {
         let app = app.clone();
+        let state = state.clone();
         Box::pin(async move {
+            // `<app>.<your domain>`: straight to that app.
+            if let Some(base) = state.domain_base()
+                && let Some(host) = req
+                    .headers()
+                    .get(header::HOST)
+                    .and_then(|h| h.to_str().ok())
+                    .map(|h| {
+                        h.rsplit_once(':')
+                            .map_or(h, |(n, p)| {
+                                if p.chars().all(|c| c.is_ascii_digit()) {
+                                    n
+                                } else {
+                                    h
+                                }
+                            })
+                            .to_string()
+                    })
+                && host != base
+                && host.ends_with(&format!(".{base}"))
+            {
+                return match state.proxies.target_for_host(&host, &base) {
+                    Some(target) => super::proxy::forward(target, peer, req).await,
+                    None => no_such_app(&host),
+                };
+            }
             req.extensions_mut().insert(ConnectInfo(peer));
             match app.oneshot(req.map(axum::body::Body::new)).await {
                 Ok(r) => r,
@@ -247,6 +273,21 @@ async fn static_file(uri: axum::http::Uri) -> Response {
             (header::CACHE_CONTROL, cache.to_string()),
         ],
         file.data.into_owned(),
+    )
+        .into_response()
+}
+
+fn no_such_app(host: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        format!(
+            "<!doctype html><meta charset=utf-8><title>No app here</title>\
+             <body style=\"font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem\">\
+             <h1>No app uses this address</h1><p>Nothing in Hearth is set up for <b>{}</b>. \
+             Give an app this subdomain in its HTTPS card.</p></body>",
+            host.replace(['<', '>', '&', '"'], "")
+        ),
     )
         .into_response()
 }

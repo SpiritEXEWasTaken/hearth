@@ -6,6 +6,7 @@
 	import { ago } from '#lib/format.ts';
 	import Modal from '#lib/components/Modal.svelte';
 	import Icon from '#lib/components/Icon.svelte';
+	import DomainCard from '#lib/components/DomainCard.svelte';
 
 	// ----- my account -----
 	let oldPw = $state('');
@@ -273,6 +274,8 @@
 					<div class="small muted fp">Fingerprint (SHA-256): <span class="mono">{tls.ca_fingerprint_sha256}</span></div>
 				{/if}
 			</div>
+			<hr />
+			<DomainCard />
 		{:else}
 			<span class="muted">Loading…</span>
 		{/if}
@@ -430,6 +433,12 @@
 	.fp {
 		margin-top: 0.4rem;
 		word-break: break-all;
+	}
+	hr {
+		border: none;
+		border-top: 1px solid var(--border);
+		margin: 0.3rem 0;
+		width: 100%;
 	}
 	.secret {
 		user-select: all;

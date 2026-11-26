@@ -20,9 +20,14 @@ export default defineConfig({
 		{ name: 'setup', testMatch: /01-setup\.spec\.ts/ },
 		{
 			name: 'desktop',
-			testMatch: /02-app\.spec\.ts/,
+			testMatch: /0[26]-.*\.spec\.ts/,
 			dependencies: ['setup'],
-			use: { viewport: { width: 1280, height: 860 } }
+			use: {
+				viewport: { width: 1280, height: 860 },
+				launchOptions: {
+					args: ['--host-resolver-rules=MAP testhome.duckdns.org 127.0.0.1, MAP *.testhome.duckdns.org 127.0.0.1']
+				}
+			}
 		},
 		{
 			// Real system updates and packages: run against a disposable VM with

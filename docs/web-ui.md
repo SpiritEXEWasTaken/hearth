@@ -41,8 +41,30 @@ included. So Home Assistant becomes `https://jarvis.<tailnet>.ts.net:8443`.
 - The proxy replaces any `X-Forwarded-For` the client sends with the address Hearth saw, and adds
   `X-Forwarded-Proto: https` and `X-Forwarded-Host`.
 
-Still to come (M5d): Let's Encrypt with your own domain or DuckDNS (DNS-01, no open ports), with
-per-app subdomains on port 443.
+## Your own domain (M5d, DuckDNS)
+
+Settings → HTTPS → *Your own domain*: the DuckDNS name, its token, and which address the name points
+to (this server's Tailscale address, or its home network address). Hearth then:
+
+1. sets the DuckDNS name to that address (only for finding the server; nothing is opened to the
+   internet),
+2. gets two Let's Encrypt certificates through DNS-01 (the proof goes into DuckDNS's TXT record):
+   one for `<name>.duckdns.org` (Hearth itself) and a wildcard for `*.<name>.duckdns.org` (apps). They
+   are requested one after the other because DuckDNS holds only one TXT record. The very first time,
+   the whole flow is tried on Let's Encrypt's staging service first, so a mistake can't hit the real
+   service's rate limits,
+3. renews them a month before they expire and keeps the address current (checked twice a day).
+
+Each app's HTTPS card then has a *Name* field (default: from the app's title, e.g. `home-assistant`):
+`https://home-assistant.<name>.duckdns.org` reaches the app on port 443, no port number needed. A name
+that no app uses shows a "No app uses this address" page.
+
+The token is stored only on the server (`/var/lib/hearth/tls/domain.json`, readable only by Hearth)
+and is never shown again or written to logs.
+
+Tests run the whole flow against Pebble (Let's Encrypt's test server) and its fake DNS
+(`ci/e2e.sh` starts them). Hidden daemon settings for that: `HEARTH_ACME_DIRECTORY`,
+`HEARTH_ACME_ROOT`, `HEARTH_DNS_TESTSRV`.
 
 ## Accounts
 

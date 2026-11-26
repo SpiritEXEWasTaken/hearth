@@ -100,6 +100,7 @@ export interface App {
 	memory_bytes: number | null;
 	web_url: string | null;
 	https_port?: number;
+	https_subdomain?: string;
 	icon: string | null;
 	containers: Container[];
 	images: ImageVersion[];
@@ -252,6 +253,9 @@ export interface HttpsView {
 	unavailable: string | null;
 	suggested_port: number | null;
 	home_assistant: boolean;
+	subdomain: string | null;
+	suggested_subdomain: string | null;
+	domain: string | null;
 }
 
 export interface HttpsTest {
@@ -259,4 +263,15 @@ export interface HttpsTest {
 	status: number | null;
 	message: string;
 	fix: string | null;
+}
+
+export interface DomainStatus {
+	configured: boolean;
+	name: string | null;
+	base: string | null;
+	address: string | null;
+	ip: string | null;
+	certificates: { name: string; expires_at: number }[];
+	last_ok: number | null;
+	last_error: string | null;
 }

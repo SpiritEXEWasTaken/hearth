@@ -24,12 +24,18 @@ const MAX_CONNECTIONS_PER_APP: usize = 256;
 #[derive(Default)]
 pub struct Proxies {
     running: Mutex<HashMap<u16, (AppHttps, tokio::task::AbortHandle)>>,
+    /// subdomain → the app's own port, for requests to `<subdomain>.<your domain>` on 443.
+    subdomains: std::sync::RwLock<HashMap<String, u16>>,
 }
 
 impl Proxies {
     /// Starts and stops listeners so they match the database. Returns problems per app.
     pub fn sync(&self, state: &State) -> HashMap<String, String> {
         let wanted = state.with_db(|db| db.list_app_https()).unwrap_or_default();
+        *self.subdomains.write().unwrap_or_else(|p| p.into_inner()) = wanted
+            .iter()
+            .filter_map(|w| w.subdomain.clone().map(|s| (s, w.target_port)))
+            .collect();
         let mut problems = HashMap::new();
         let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
         running.retain(|port, (h, handle)| {
@@ -69,6 +75,17 @@ impl Proxies {
             running.insert(w.port, (w, task.abort_handle()));
         }
         problems
+    }
+
+    /// The app port for `<subdomain>.<base>`, if `host` is one of yours.
+    pub fn target_for_host(&self, host: &str, base: &str) -> Option<u16> {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        let sub = host.strip_suffix(base)?.strip_suffix('.')?;
+        self.subdomains
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(sub)
+            .copied()
     }
 
     pub fn is_running(&self, port: u16) -> bool {

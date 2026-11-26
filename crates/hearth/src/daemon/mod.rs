@@ -6,6 +6,7 @@ mod app_https;
 pub mod apps;
 mod auth;
 pub mod db;
+mod domain;
 mod engine;
 mod health;
 mod helper_client;
@@ -72,6 +73,8 @@ pub struct State {
     certs: Arc<tls::CertStore>,
     web: Arc<web_auth::WebAuth>,
     proxies: Arc<proxy::Proxies>,
+    /// When the domain was last read, and its base name.
+    domain_cache: Arc<Mutex<(Option<std::time::Instant>, Option<String>)>>,
     state_dir: PathBuf,
 }
 
@@ -101,6 +104,23 @@ pub fn host_timezone() -> String {
 }
 
 impl State {
+    /// Re-reads the domain on next use (after it's set up or removed).
+    pub fn forget_domain(&self) {
+        self.domain_cache.lock().unwrap_or_else(|p| p.into_inner()).0 = None;
+    }
+
+    /// `<name>.duckdns.org` when your own domain is set up.
+    pub fn domain_base(&self) -> Option<String> {
+        let mut cache = self.domain_cache.lock().unwrap_or_else(|p| p.into_inner());
+        if cache.0.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
+            *cache = (
+                Some(std::time::Instant::now()),
+                domain::load_config(self).map(|c| c.base()),
+            );
+        }
+        cache.1.clone()
+    }
+
     /// Runs `f` with the database. Never call across an `.await`.
     pub fn with_db<R>(&self, f: impl FnOnce(&Db) -> R) -> R {
         let guard = self.db.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -123,6 +143,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         certs: Arc::new(tls::CertStore::new(&cfg.state_dir, &hostname)),
         web: Arc::new(web_auth::WebAuth::new(&cfg.state_dir)),
         proxies: Arc::new(proxy::Proxies::default()),
+        domain_cache: Arc::new(Mutex::new((None, None))),
         state_dir: cfg.state_dir.clone(),
         hostname,
         check_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -176,6 +197,7 @@ pub async fn run(cfg: DaemonConfig) -> Result<(), String> {
         {
             tracing::warn!("local HTTPS certificate: {e}");
         }
+        state.certs.set_domain(domain::load_certs(&state));
         tokio::spawn(tls::refresher(state.clone()));
         tokio::spawn(web::serve(state.clone(), cfg.web_listen.clone()));
         for (app, problem) in state.proxies.sync(&state) {

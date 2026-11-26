@@ -28,6 +28,132 @@ pub fn routes() -> Router<State> {
         .route("/v1/apps/{id}/https", get(show).put(set))
         .route("/v1/apps/{id}/https/test", post(test))
         .route("/v1/apps/{id}/fix/ha-proxy", post(ha_fix))
+        .route(
+            "/v1/domain",
+            get(domain_show).put(domain_set).delete(domain_remove),
+        )
+        .route("/v1/domain/renew", post(domain_renew))
+}
+
+// ----- your own domain -----
+
+async fn domain_show(AxState(st): AxState<State>, p: Principal) -> ApiResult<super::domain::DomainStatus> {
+    p.require(scopes::READ)?;
+    ok(super::domain::status(&st))
+}
+
+#[derive(Deserialize)]
+struct DomainBody {
+    name: String,
+    /// Kept as is when left out (changing only the address).
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default = "default_address")]
+    address: String,
+}
+
+fn default_address() -> String {
+    "tailscale".into()
+}
+
+async fn domain_set(
+    AxState(st): AxState<State>,
+    p: Principal,
+    Json(b): Json<DomainBody>,
+) -> ApiResult<JobRef> {
+    p.require(scopes::ADMIN)?;
+    let name = super::domain::valid_name(&b.name).map_err(Error::Usage)?;
+    if b.address != "tailscale" && b.address != "lan" {
+        return Err(Error::Usage("address must be 'tailscale' or 'lan'".into()).into());
+    }
+    let token = match b.token.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(t) => super::domain::valid_token(t).map_err(Error::Usage)?,
+        None => super::domain::load_config(&st)
+            .filter(|c| c.name == name)
+            .map(|c| c.token)
+            .ok_or_else(|| Error::Usage("enter the DuckDNS token".into()))?,
+    };
+    if super::domain::pick_ip(&b.address).is_none() {
+        return Err(Error::Usage(if b.address == "tailscale" {
+            "this server has no Tailscale address; is Tailscale running?".into()
+        } else {
+            "this server has no home network address".into()
+        })
+        .into());
+    }
+    let cfg = super::domain::DomainConfig {
+        name,
+        token,
+        address: b.address,
+    };
+    let changed_name = super::domain::load_config(&st).is_none_or(|c| c.name != cfg.name);
+    if changed_name {
+        // Another name: the old certificates don't fit any more.
+        let _ = super::domain::save_config(&st, None);
+    }
+    super::domain::save_config(&st, Some(&cfg)).map_err(Error::Other)?;
+    st.forget_domain();
+    tracing::info!(name = %cfg.name, address = %cfg.address, by = %p.actor(), "domain set");
+    let st2 = st.clone();
+    let job = st
+        .jobs
+        .start(&st, "domain", "https", &p.actor(), move |job| async move {
+            super::domain::run(&st2, &job, changed_name).await
+        });
+    ok(JobRef { job })
+}
+
+async fn domain_renew(AxState(st): AxState<State>, p: Principal) -> ApiResult<JobRef> {
+    p.require(scopes::ADMIN)?;
+    if super::domain::load_config(&st).is_none() {
+        return Err(Error::Usage("no domain is set up".into()).into());
+    }
+    let st2 = st.clone();
+    let job = st
+        .jobs
+        .start(&st, "domain", "https", &p.actor(), move |job| async move {
+            super::domain::run(&st2, &job, true).await
+        });
+    ok(JobRef { job })
+}
+
+async fn domain_remove(AxState(st): AxState<State>, p: Principal) -> ApiResult<Value> {
+    p.require(scopes::ADMIN)?;
+    super::domain::save_config(&st, None).map_err(Error::Other)?;
+    st.certs.set_domain(Vec::new());
+    st.forget_domain();
+    tracing::info!(by = %p.actor(), "domain removed");
+    ok(json!({ "removed": true }))
+}
+
+/// A subdomain made from the app's title: "Home Assistant" → "home-assistant".
+pub fn slug(title: &str) -> String {
+    let mut out = String::new();
+    for c in title.to_ascii_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    let out = out.trim_end_matches('-').chars().take(40).collect::<String>();
+    if out.is_empty() { "app".into() } else { out }
+}
+
+fn valid_subdomain(s: &str) -> Result<String, Error> {
+    let s = s.trim().to_ascii_lowercase();
+    let ok = !s.is_empty()
+        && s.len() <= 63
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !s.starts_with('-')
+        && !s.ends_with('-');
+    if ok {
+        Ok(s)
+    } else {
+        Err(Error::Usage(
+            "a subdomain is letters, digits and '-' (like ha or home-assistant)".into(),
+        ))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +172,11 @@ pub struct HttpsView {
     pub suggested_port: Option<u16>,
     /// The app looks like Home Assistant (it needs the proxy fix).
     pub home_assistant: bool,
+    pub subdomain: Option<String>,
+    /// A subdomain to offer when your own domain is set up and the app has none.
+    pub suggested_subdomain: Option<String>,
+    /// Your own domain, if set up (`<name>.duckdns.org`).
+    pub domain: Option<String>,
 }
 
 /// `http://host:8123/` → 8123, for plain-HTTP web addresses only.
@@ -92,13 +223,13 @@ fn suggest(st: &State) -> Option<u16> {
     (SUGGEST_FROM..=SUGGEST_TO).find(|p| !used.contains(p) && port_free(*p))
 }
 
-pub fn urls(st: &State, port: u16) -> Vec<String> {
+pub fn urls(st: &State, port: u16, subdomain: Option<&str>) -> Vec<String> {
     let info = st.certs.info();
-    let mut out: Vec<String> = info
-        .tailscale_names
-        .iter()
-        .map(|n| format!("https://{n}:{port}"))
-        .collect();
+    let mut out: Vec<String> = Vec::new();
+    if let (Some(sub), Some(base)) = (subdomain, st.domain_base()) {
+        out.push(format!("https://{sub}.{base}/"));
+    }
+    out.extend(info.tailscale_names.iter().map(|n| format!("https://{n}:{port}")));
     for n in info.local_names {
         if n == "localhost" || n == "127.0.0.1" || n == "::1" {
             continue;
@@ -127,11 +258,20 @@ async fn view(st: &State, id: &str) -> Result<HttpsView, Error> {
             .as_ref()
             .map(|h| h.target_port)
             .or_else(|| app.summary.web_url.as_deref().and_then(|u| http_port(u).ok())),
-        urls: current.as_ref().map(|h| urls(st, h.port)).unwrap_or_default(),
+        urls: current
+            .as_ref()
+            .map(|h| urls(st, h.port, h.subdomain.as_deref()))
+            .unwrap_or_default(),
         running: current.as_ref().is_some_and(|h| st.proxies.is_running(h.port)),
         unavailable,
         suggested_port: if current.is_none() { suggest(st) } else { None },
         home_assistant: is_home_assistant(&app),
+        subdomain: current.as_ref().and_then(|h| h.subdomain.clone()),
+        suggested_subdomain: st
+            .domain_base()
+            .filter(|_| current.as_ref().is_none_or(|h| h.subdomain.is_none()))
+            .map(|_| slug(&app.summary.title)),
+        domain: st.domain_base(),
     })
 }
 
@@ -145,6 +285,9 @@ struct SetBody {
     enabled: bool,
     #[serde(default)]
     port: Option<u16>,
+    /// `<subdomain>.<your domain>`; "" removes it, left out keeps it.
+    #[serde(default)]
+    subdomain: Option<String>,
 }
 
 async fn set(
@@ -187,10 +330,25 @@ async fn set(
     if changing && !port_free(port) {
         return Err(Error::Usage(format!("port {port} is already in use on this server")).into());
     }
+    let subdomain = match b.subdomain.as_deref().map(str::trim) {
+        Some("") => None,
+        Some(sd) => {
+            let sd = valid_subdomain(sd)?;
+            if let Some(other) = existing
+                .iter()
+                .find(|h| h.subdomain.as_deref() == Some(sd.as_str()) && h.app != id)
+            {
+                return Err(Error::Usage(format!("{sd} is already used for {}", other.app)).into());
+            }
+            Some(sd)
+        }
+        None => mine.and_then(|h| h.subdomain.clone()),
+    };
     let h = AppHttps {
         app: id.clone(),
         port,
         target_port: target,
+        subdomain,
     };
     st.with_db(|db| db.set_app_https(&h))
         .map_err(|e| Error::Other(e.to_string()))?;
@@ -361,6 +519,15 @@ async fn ha_fix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slugs() {
+        assert_eq!(slug("Home Assistant"), "home-assistant");
+        assert_eq!(slug("  Immich!! "), "immich");
+        assert_eq!(slug("??"), "app");
+        assert!(valid_subdomain("ha").is_ok());
+        assert!(valid_subdomain("a.b").is_err());
+    }
 
     #[test]
     fn ports_from_web_addresses() {

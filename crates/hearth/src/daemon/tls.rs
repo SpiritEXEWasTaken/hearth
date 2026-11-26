@@ -33,6 +33,8 @@ pub struct CertStore {
     hostname: String,
     local: RwLock<Option<Arc<CertifiedKey>>>,
     tailscale: RwLock<Vec<(String, Arc<CertifiedKey>)>>,
+    /// Let's Encrypt certificates for your own domain: (name or `*.base`, key).
+    domain: RwLock<Vec<(String, Arc<CertifiedKey>)>>,
 }
 
 /// What the UI shows about HTTPS.
@@ -50,6 +52,7 @@ impl CertStore {
             hostname: hostname.to_string(),
             local: RwLock::new(None),
             tailscale: RwLock::new(Vec::new()),
+            domain: RwLock::new(Vec::new()),
         }
     }
 
@@ -154,9 +157,32 @@ impl CertStore {
         *self.tailscale.write().unwrap_or_else(|p| p.into_inner()) = loaded;
     }
 
+    /// Loads your own domain's certificates: (name pattern, chain PEM, key PEM).
+    pub fn set_domain(&self, certs: Vec<(String, String, String)>) {
+        let mut loaded = Vec::new();
+        for (name, chain, key) in certs {
+            match certified_key(&chain, &key) {
+                Ok(ck) => loaded.push((name.to_ascii_lowercase(), Arc::new(ck))),
+                Err(e) => tracing::warn!(%name, "bad domain certificate: {e}"),
+            }
+        }
+        *self.domain.write().unwrap_or_else(|p| p.into_inner()) = loaded;
+    }
+
     fn pick(&self, sni: Option<&str>) -> Option<Arc<CertifiedKey>> {
         if let Some(name) = sni {
             let name = name.trim_end_matches('.').to_ascii_lowercase();
+            let domain = self.domain.read().unwrap_or_else(|p| p.into_inner());
+            if let Some((_, ck)) = domain.iter().find(|(d, _)| *d == name) {
+                return Some(ck.clone());
+            }
+            // `*.base` covers exactly one more label.
+            if let Some((_, rest)) = name.split_once('.')
+                && let Some((_, ck)) = domain.iter().find(|(d, _)| d.strip_prefix("*.") == Some(rest))
+            {
+                return Some(ck.clone());
+            }
+            drop(domain);
             let ts = self.tailscale.read().unwrap_or_else(|p| p.into_inner());
             if let Some((_, ck)) = ts.iter().find(|(d, _)| *d == name) {
                 return Some(ck.clone());
@@ -179,6 +205,7 @@ pub async fn refresher(state: State) {
     loop {
         if tick.is_multiple_of(12) {
             fetch_tailscale(&state).await;
+            super::domain::maintain(&state).await;
         }
         let certs = state.certs.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || certs.refresh_local())
@@ -363,5 +390,22 @@ mod tests {
         let local = store.pick(Some("testhost")).expect("test");
         assert_ne!(ts.cert[0], local.cert[0]);
         assert_eq!(store.info().tailscale_names, vec!["x.tail.ts.net".to_string()]);
+
+        // Your own domain: the exact name and one level of wildcard.
+        let (c1, k1) = issue_server_cert(&ca, &ca_key, "x", &["me.duckdns.org".to_string()]).expect("test");
+        let (c2, k2) = issue_server_cert(&ca, &ca_key, "x", &["*.me.duckdns.org".to_string()]).expect("test");
+        store.set_domain(vec![
+            ("me.duckdns.org".into(), c1, k1),
+            ("*.me.duckdns.org".into(), c2, k2),
+        ]);
+        let apex = store.pick(Some("me.duckdns.org")).expect("test");
+        let ha = store.pick(Some("ha.me.duckdns.org")).expect("test");
+        assert_ne!(apex.cert[0], ha.cert[0]);
+        assert_ne!(ha.cert[0], local.cert[0]);
+        // Two levels down isn't covered: the local certificate answers.
+        assert_eq!(
+            store.pick(Some("a.b.me.duckdns.org")).expect("test").cert[0],
+            local.cert[0]
+        );
     }
 }

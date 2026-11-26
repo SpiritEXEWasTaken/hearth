@@ -16,6 +16,7 @@
 	let v = $state<HttpsView | null>(null);
 	let error = $state('');
 	let port = $state<number | null>(null);
+	let subdomain = $state('');
 	let busy = $state(false);
 	let test = $state<HttpsTest | null>(null);
 	let testing = $state(false);
@@ -28,6 +29,7 @@
 		try {
 			v = await get<HttpsView>(base);
 			port = v.port ?? v.suggested_port;
+			subdomain = v.subdomain ?? v.suggested_subdomain ?? '';
 			error = '';
 		} catch (e) {
 			error = errorText(e);
@@ -40,9 +42,26 @@
 		error = '';
 		test = null;
 		try {
-			v = await put<HttpsView>(base, { enabled, port: enabled ? port : undefined });
+			v = await put<HttpsView>(base, {
+				enabled,
+				port: enabled ? port : undefined,
+				subdomain: enabled && v?.domain ? subdomain : undefined
+			});
 			onchange();
 			if (enabled) await runTest();
+		} catch (e) {
+			error = errorText(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function saveSubdomain() {
+		busy = true;
+		error = '';
+		try {
+			v = await put<HttpsView>(base, { enabled: true, subdomain });
+			onchange();
 		} catch (e) {
 			error = errorText(e);
 		} finally {
@@ -107,6 +126,9 @@
 		{#if canChange}
 			<div class="row">
 				<label class="inline">Port <input type="number" min="1024" max="65535" bind:value={port} /></label>
+				{#if v.domain}
+					<label class="inline">Name <input class="sub" bind:value={subdomain} aria-label="Subdomain" />.{v.domain}</label>
+				{/if}
 				<button class="primary" onclick={() => setEnabled(true)} disabled={busy || !port}>
 					{busy ? 'Turning on…' : 'Use HTTPS'}
 				</button>
@@ -118,6 +140,12 @@
 			{#each v.urls as u (u)}<a class="mono small" href={u} target="_blank" rel="noopener noreferrer">{u}</a>{/each}
 		</div>
 		<div class="muted small">Forwards to the app's port {v.target_port}.</div>
+		{#if v.domain && canChange}
+			<div class="row small">
+				<label class="inline">Name <input class="sub" bind:value={subdomain} aria-label="Subdomain" placeholder="none" />.{v.domain}</label>
+				{#if subdomain !== (v.subdomain ?? '')}<button class="small" onclick={saveSubdomain} disabled={busy}>Save</button>{/if}
+			</div>
+		{/if}
 		{#if test}
 			<div class="notice {test.ok ? 'ok' : 'warn'}" role="status">
 				{test.message}
@@ -185,6 +213,9 @@
 	}
 	.inline input {
 		width: 7rem;
+	}
+	.inline input.sub {
+		width: 9rem;
 	}
 	.fixrow {
 		display: flex;
