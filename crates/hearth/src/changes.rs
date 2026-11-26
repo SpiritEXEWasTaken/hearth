@@ -824,7 +824,7 @@ async fn app(c: &Client, g: &GlobalArgs, cmd: &AppCmd) -> Option<Result<ExitCode
                     if let Some(t) = v.get("test") {
                         println!("{}", t["message"].as_str().unwrap_or(""));
                         if t["fix"].as_str() == Some("ha-proxy") {
-                            println!("Fix it in the web UI (the app's HTTPS card), which edits configuration.yaml and restarts HA.");
+                            println!("Fix it in the web UI (the app's HTTPS card): Hearth adds the proxy settings to HA (backup kept) and restarts it.");
                         }
                     }
                 }
