@@ -38,7 +38,16 @@ test('own domain: set up, get certificates, give an app a subdomain, open it', a
 	await expect(p2.getByRole('heading', { name: 'No app uses this address' })).toBeVisible();
 	await ctx.close();
 
+	// Renaming while HTTPS is on must leave the app's port listening.
 	await page.goto('/apps/whoami');
+	await card.getByLabel('Subdomain').fill('renamed');
+	await card.getByRole('button', { name: 'Save' }).click();
+	await expect(card.getByRole('link', { name: 'https://renamed.testhome.duckdns.org/' })).toBeVisible();
+	await card.getByRole('button', { name: 'Test' }).click();
+	await expect(card.getByRole('status')).toContainText('Works');
+	const onPort = await page.request.get('https://127.0.0.1:18445/after-rename', { ignoreHTTPSErrors: true });
+	expect(await onPort.text()).toContain('GET /after-rename');
+
 	await card.getByRole('button', { name: 'Turn off' }).click();
 	await page.goto('/settings');
 	await page.getByRole('button', { name: 'Remove', exact: true }).click();

@@ -13,6 +13,7 @@ use axum::http::{HeaderValue, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,9 +22,16 @@ pub const SUGGEST_FROM: u16 = 8443;
 pub const SUGGEST_TO: u16 = 8999;
 const MAX_CONNECTIONS_PER_APP: usize = 256;
 
+struct Listening {
+    config: AppHttps,
+    /// Where the listener forwards to; changed in place, so the port is never bound again.
+    target: Arc<AtomicU16>,
+    task: tokio::task::AbortHandle,
+}
+
 #[derive(Default)]
 pub struct Proxies {
-    running: Mutex<HashMap<u16, (AppHttps, tokio::task::AbortHandle)>>,
+    running: Mutex<HashMap<u16, Listening>>,
     /// subdomain → the app's own port, for requests to `<subdomain>.<your domain>` on 443.
     subdomains: std::sync::RwLock<HashMap<String, u16>>,
 }
@@ -38,13 +46,17 @@ impl Proxies {
             .collect();
         let mut problems = HashMap::new();
         let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
-        running.retain(|port, (h, handle)| {
-            let keep = wanted.iter().any(|w| w == h && w.port == *port);
-            if !keep {
-                handle.abort();
-                tracing::info!(app = %h.app, port, "app HTTPS stopped");
-            }
-            keep
+        // A listener stays while its port is wanted. Stopping one only takes effect later, so
+        // binding the same port again right away would fail with "address in use".
+        running.retain(|port, l| {
+            let Some(w) = wanted.iter().find(|w| w.port == *port) else {
+                l.task.abort();
+                tracing::info!(app = %l.config.app, port, "app HTTPS stopped");
+                return false;
+            };
+            l.target.store(w.target_port, Ordering::Relaxed);
+            l.config = w.clone();
+            true
         });
         let Some(acceptor) = tls_acceptor(state) else {
             return problems;
@@ -63,16 +75,25 @@ impl Proxies {
                         continue;
                     }
                 };
-            let target = w.target_port;
-            let handler: Handler = Arc::new(move |peer, req| Box::pin(forward(target, peer, req)));
+            let target = Arc::new(AtomicU16::new(w.target_port));
+            let current = target.clone();
+            let handler: Handler =
+                Arc::new(move |peer, req| Box::pin(forward(current.load(Ordering::Relaxed), peer, req)));
             let task = tokio::spawn(accept_loop(
                 listener,
                 acceptor.clone(),
                 Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS_PER_APP)),
                 handler,
             ));
-            tracing::info!(app = %w.app, port = w.port, target, "app HTTPS listening");
-            running.insert(w.port, (w, task.abort_handle()));
+            tracing::info!(app = %w.app, port = w.port, target = w.target_port, "app HTTPS listening");
+            running.insert(
+                w.port,
+                Listening {
+                    config: w,
+                    target,
+                    task: task.abort_handle(),
+                },
+            );
         }
         problems
     }
